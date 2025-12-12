@@ -7,13 +7,13 @@ import {
   TextInput,
   TouchableOpacity,
   KeyboardAvoidingView,
-  Keyboard,
+  StatusBar,
   Platform,
   ActivityIndicator,
   Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter, Stack } from "expo-router";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   collection,
@@ -71,7 +71,6 @@ export default function ChatScreen() {
   const [editingMessage, setEditingMessage] = useState<ChatMessage | null>(
     null
   );
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const flatListRef = useRef<FlatList>(null);
 
   useEffect(() => {
@@ -133,20 +132,6 @@ export default function ChatScreen() {
 
     return () => unsubscribe();
   }, [chatId, user?.uid]);
-
-  useEffect(() => {
-    const showListener = Keyboard.addListener("keyboardDidShow", (e) => {
-      setKeyboardHeight(e.endCoordinates.height);
-    });
-    const hideListener = Keyboard.addListener("keyboardDidHide", () => {
-      setKeyboardHeight(0);
-    });
-
-    return () => {
-      showListener.remove();
-      hideListener.remove();
-    };
-  }, []);
 
   const startEditing = (message: ChatMessage) => {
     setEditingMessage(message);
@@ -332,37 +317,42 @@ export default function ChatScreen() {
   }
 
   return (
-    <View style={styles.container}>
-      {/* Header */}
-      <View style={[styles.header, { paddingTop: insets.top }]}>
-        <TouchableOpacity
-          onPress={() => router.back()}
-          style={styles.backButton}
-        >
-          <ArrowLeft size={24} color="#007AFF" />
-        </TouchableOpacity>
-        <View style={styles.headerInfo}>
-          <Text style={styles.headerAvatar}>{participant?.avatar}</Text>
-          <Text style={styles.headerUsername}>{participant?.username}</Text>
-        </View>
-      </View>
-
-      {/* Messages */}
+    <React.Fragment>
+      <StatusBar barStyle="dark-content" backgroundColor="#fff" />
+      <Stack.Screen options={{ headerShown: false }} />
       <KeyboardAvoidingView
-        style={styles.keyboardAvoidingView}
+        style={styles.container}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
+        keyboardVerticalOffset={0}
       >
+        {/* Header */}
+        <View style={[styles.header, { paddingTop: insets.top }]}>
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={styles.backButton}
+          >
+            <ArrowLeft size={24} color="#007AFF" />
+          </TouchableOpacity>
+          <View style={styles.headerInfo}>
+            <Text style={styles.headerAvatar}>{participant?.avatar}</Text>
+            <Text style={styles.headerUsername}>{participant?.username}</Text>
+          </View>
+        </View>
+
+        {/* Messages */}
         <FlatList
           ref={flatListRef}
           data={messages}
           renderItem={renderMessage}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.messagesContainer}
+          style={styles.messagesList}
           onContentSizeChange={() =>
             flatListRef.current?.scrollToEnd({ animated: true })
           }
-          onLayout={() => flatListRef.current?.scrollToEnd({ animated: true })}
+          onLayout={() =>
+            flatListRef.current?.scrollToEnd({ animated: true })
+          }
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
               <Text style={styles.emptyText}>No messages yet</Text>
@@ -370,46 +360,48 @@ export default function ChatScreen() {
             </View>
           }
         />
-      </KeyboardAvoidingView>
 
-      {/* Input */}
-      <View
-        style={[
-          styles.inputContainer,
-          { paddingBottom: insets.bottom + keyboardHeight },
-        ]}
-      >
-        <TextInput
-          style={styles.textInput}
-          value={newMessage}
-          onChangeText={setNewMessage}
-          placeholder={editingMessage ? "Edit message..." : "Type a message..."}
-          placeholderTextColor="#999"
-          multiline
-          maxLength={1000}
-        />
-        <View style={styles.inputButtons}>
-          {editingMessage && (
+        {/* Input */}
+        <View
+          style={[
+            styles.inputContainer,
+            { paddingBottom: insets.bottom || 12 },
+          ]}
+        >
+          <TextInput
+            style={styles.textInput}
+            value={newMessage}
+            onChangeText={setNewMessage}
+            placeholder={
+              editingMessage ? "Edit message..." : "Type a message..."
+            }
+            placeholderTextColor="#999"
+            multiline
+            maxLength={1000}
+          />
+          <View style={styles.inputButtons}>
+            {editingMessage && (
+              <TouchableOpacity
+                style={styles.cancelButton}
+                onPress={cancelEditing}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity
-              style={styles.cancelButton}
-              onPress={cancelEditing}
+              style={[
+                styles.sendButton,
+                (!newMessage.trim() || sending) && styles.sendButtonDisabled,
+              ]}
+              onPress={sendMessage}
+              disabled={!newMessage.trim() || sending}
             >
-              <Text style={styles.cancelButtonText}>Cancel</Text>
+              <Send size={20} color="#fff" />
             </TouchableOpacity>
-          )}
-          <TouchableOpacity
-            style={[
-              styles.sendButton,
-              (!newMessage.trim() || sending) && styles.sendButtonDisabled,
-            ]}
-            onPress={sendMessage}
-            disabled={!newMessage.trim() || sending}
-          >
-            <Send size={20} color="#fff" />
-          </TouchableOpacity>
+          </View>
         </View>
-      </View>
-    </View>
+      </KeyboardAvoidingView>
+    </React.Fragment>
   );
 }
 
@@ -426,10 +418,6 @@ const styles = StyleSheet.create({
   },
   messagesList: {
     flex: 1,
-  },
-  keyboardAvoidingView: {
-    flex: 1,
-    justifyContent: "flex-end",
   },
   header: {
     flexDirection: "row",
@@ -452,13 +440,13 @@ const styles = StyleSheet.create({
     marginRight: 12,
   },
   headerUsername: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: "600",
     color: "#1a1a1a",
   },
   messagesContainer: {
-    flex: 1,
-    padding: 16,
+    flexGrow: 1,
+    padding: 20,
   },
   messageContainer: {
     maxWidth: "80%",
@@ -480,8 +468,8 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   messageText: {
-    fontSize: 16,
-    lineHeight: 20,
+    fontSize: 18,
+    lineHeight: 22,
   },
   ownMessageText: {
     color: "#fff",
