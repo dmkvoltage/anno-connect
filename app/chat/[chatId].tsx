@@ -7,6 +7,7 @@ import {
   TextInput,
   TouchableOpacity,
   KeyboardAvoidingView,
+  Keyboard,
   StatusBar,
   Platform,
   ActivityIndicator,
@@ -322,7 +323,7 @@ export default function ChatScreen() {
       <Stack.Screen options={{ headerShown: false }} />
       <KeyboardAvoidingView
         style={styles.container}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
         keyboardVerticalOffset={0}
       >
         {/* Header */}
@@ -365,7 +366,7 @@ export default function ChatScreen() {
         <View
           style={[
             styles.inputContainer,
-            { paddingBottom: insets.bottom || 12 },
+            { marginBottom: insets.bottom },
           ]}
         >
           <TextInput
