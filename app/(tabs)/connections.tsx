@@ -1,17 +1,16 @@
 import { StyleSheet, Text, View, ActivityIndicator } from "react-native";
 import { useAuth } from "@/contexts/AuthContext";
 import AuthScreen from "@/components/AuthScreen";
-import DiscoverScreen from "@/components/DiscoverScreen";
+import ConnectionsScreen from "@/components/ConnectionsScreen";
 import React from "react";
 
-export default function TabOneScreen() {
+export default function ConnectionsTab() {
   const { user, isLoading } = useAuth();
 
   if (isLoading) {
     return (
       <View style={styles.container}>
         <ActivityIndicator size="large" color="#007AFF" />
-        <Text style={styles.text}>Loading...</Text>
       </View>
     );
   }
@@ -20,7 +19,7 @@ export default function TabOneScreen() {
     return <AuthScreen />;
   }
 
-  return <DiscoverScreen />;
+  return <ConnectionsScreen />;
 }
 
 const styles = StyleSheet.create({
@@ -28,14 +27,6 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    gap: 8,
     backgroundColor: "#fff",
-  },
-  text: {
-    fontSize: 16,
-    textAlign: "center",
-    paddingHorizontal: 20,
-    marginTop: 12,
-    color: "#666",
   },
 });
