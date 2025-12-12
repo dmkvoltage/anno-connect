@@ -18,6 +18,7 @@ interface ChatItem extends Connection {
   connectedUserAvatar: string;
   lastMessage?: string;
   lastMessageTime?: Date;
+  unreadCount: number;
 }
 
 export default function ChatsScreen() {
@@ -40,36 +41,116 @@ export default function ChatsScreen() {
     const unsubscribe = onSnapshot(connectionsQuery, async (snapshot) => {
       const connections = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Connection[];
 
-      // Get chat details and connected user info
-      const chatsWithDetails = await Promise.all(
-        connections.map(async (conn) => {
+      // Set up real-time listeners for each chat
+      const chatUnsubscribes: (() => void)[] = [];
+      const chatPromises = connections.map(async (conn) => {
+        return new Promise<ChatItem>((resolve) => {
           // Get connected user details
-          const connectedUserDoc = await getDoc(doc(db, 'users', conn.connectedUserId));
-          const connectedUserData = connectedUserDoc.data();
+          const connectedUserDoc = getDoc(doc(db, 'users', conn.connectedUserId));
+          const chatDoc = getDoc(doc(db, 'chats', conn.chatId));
 
-          // Get last message from chat
-          const chatDoc = await getDoc(doc(db, 'chats', conn.chatId));
-          const chatData = chatDoc.data();
+          Promise.all([connectedUserDoc, chatDoc]).then(([connectedUserSnap, chatSnap]) => {
+            const connectedUserData = connectedUserSnap.data();
+            const chatData = chatSnap.data();
 
-          return {
-            ...conn,
-            connectedUserUsername: connectedUserData?.username || 'Unknown',
-            connectedUserAvatar: connectedUserData?.avatar || '👤',
-            lastMessage: chatData?.lastMessage?.content || 'No messages yet',
-            lastMessageTime: chatData?.lastMessage?.createdAt?.toDate() || conn.createdAt,
-          };
-        })
-      );
+            const lastMessageData = chatData?.lastMessage;
+            let lastMessageText = 'No messages yet';
+            let lastMessageSender = '';
 
-      // Sort by last message time
-      chatsWithDetails.sort((a, b) => {
-        const aTime = a.lastMessageTime || new Date(0);
-        const bTime = b.lastMessageTime || new Date(0);
-        return bTime.getTime() - aTime.getTime();
+            if (lastMessageData) {
+              const isOwnMessage = lastMessageData.senderId === user.uid;
+              lastMessageSender = isOwnMessage ? 'You' : connectedUserData?.username || 'Unknown';
+
+              // Show typing indicator if user is typing
+              const typingUsers = Object.keys(chatData?.typing || {}).filter(
+                uid => chatData.typing[uid] && uid !== user.uid
+              );
+
+              if (typingUsers.length > 0) {
+                lastMessageText = 'typing...';
+              } else {
+                // Show message preview
+                lastMessageText = lastMessageData.content;
+                if (lastMessageText.length > 30) {
+                  lastMessageText = lastMessageText.substring(0, 30) + '...';
+                }
+              }
+            }
+
+            const chatItem: ChatItem = {
+              ...conn,
+              connectedUserUsername: connectedUserData?.username || 'Unknown',
+              connectedUserAvatar: connectedUserData?.avatar || '👤',
+              lastMessage: lastMessageText,
+              lastMessageTime: lastMessageData?.createdAt?.toDate() || conn.createdAt,
+              unreadCount: chatData?.unreadCount?.[user.uid] || 0,
+            };
+
+            // Set up real-time listener for this chat
+            const chatUnsubscribe = onSnapshot(doc(db, 'chats', conn.chatId), (chatSnapshot) => {
+              const updatedChatData = chatSnapshot.data();
+              const lastMessageData = updatedChatData?.lastMessage;
+
+              let updatedLastMessage = 'No messages yet';
+              if (lastMessageData) {
+                const isOwnMessage = lastMessageData.senderId === user.uid;
+
+                // Show typing indicator if user is typing
+                const typingUsers = Object.keys(updatedChatData?.typing || {}).filter(
+                  uid => updatedChatData.typing[uid] && uid !== user.uid
+                );
+
+                if (typingUsers.length > 0) {
+                  updatedLastMessage = 'typing...';
+                } else {
+                  // Show message preview
+                  updatedLastMessage = lastMessageData.content;
+                  if (updatedLastMessage.length > 30) {
+                    updatedLastMessage = updatedLastMessage.substring(0, 30) + '...';
+                  }
+                }
+              }
+
+              setChats(prevChats => {
+                return prevChats.map(chat =>
+                  chat.chatId === conn.chatId
+                    ? {
+                        ...chat,
+                        lastMessage: updatedLastMessage,
+                        lastMessageTime: lastMessageData?.createdAt?.toDate() || chat.createdAt,
+                        unreadCount: updatedChatData?.unreadCount?.[user.uid] || 0,
+                      }
+                    : chat
+                ).sort((a, b) => {
+                  const aTime = a.lastMessageTime || new Date(0);
+                  const bTime = b.lastMessageTime || new Date(0);
+                  return bTime.getTime() - aTime.getTime();
+                });
+              });
+            });
+
+            chatUnsubscribes.push(chatUnsubscribe);
+            resolve(chatItem);
+          });
+        });
       });
 
-      setChats(chatsWithDetails);
-      setLoading(false);
+      Promise.all(chatPromises).then((chatsWithDetails) => {
+        // Sort by last message time
+        chatsWithDetails.sort((a, b) => {
+          const aTime = a.lastMessageTime || new Date(0);
+          const bTime = b.lastMessageTime || new Date(0);
+          return bTime.getTime() - aTime.getTime();
+        });
+
+        setChats(chatsWithDetails);
+        setLoading(false);
+      });
+
+      return () => {
+        unsubscribe();
+        chatUnsubscribes.forEach(unsub => unsub());
+      };
     });
 
     return () => unsubscribe();
@@ -86,9 +167,18 @@ export default function ChatsScreen() {
           {item.lastMessage}
         </Text>
       </View>
-      <Text style={styles.chatTime}>
-        {item.lastMessageTime ? new Date(item.lastMessageTime).toLocaleDateString() : ''}
-      </Text>
+      <View style={styles.chatMeta}>
+        <Text style={styles.chatTime}>
+          {item.lastMessageTime ? new Date(item.lastMessageTime).toLocaleDateString() : ''}
+        </Text>
+        {item.unreadCount > 0 && (
+          <View style={styles.unreadBadge}>
+            <Text style={styles.unreadBadgeText}>
+              {item.unreadCount > 99 ? '99+' : item.unreadCount}
+            </Text>
+          </View>
+        )}
+      </View>
     </TouchableOpacity>
   );
 

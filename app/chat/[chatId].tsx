@@ -29,18 +29,20 @@ import {
   deleteDoc,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { ArrowLeft, Send } from "lucide-react-native";
+import { ArrowLeft, Send, Check, CheckCheck } from "lucide-react-native";
 import type { Message } from "@/types/chat";
 
 interface ChatMessage extends Message {
   id: string;
   deletedBy?: string[];
+  readBy?: string[];
 }
 
 interface ChatParticipant {
   id: string;
   username: string;
   avatar: string;
+  isTyping?: boolean;
 }
 
 // Helper function to format time ago
@@ -72,6 +74,8 @@ export default function ChatScreen() {
   const [editingMessage, setEditingMessage] = useState<ChatMessage | null>(
     null
   );
+  const [isTyping, setIsTyping] = useState(false);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flatListRef = useRef<FlatList>(null);
 
   useEffect(() => {
@@ -200,6 +204,76 @@ export default function ChatScreen() {
     setNewMessage("");
   };
 
+  const handleTextChange = (text: string) => {
+    setNewMessage(text);
+
+    // Handle typing indicator
+    if (!editingMessage && text.trim()) {
+      if (!isTyping) {
+        setIsTyping(true);
+        updateTypingStatus(true);
+      }
+
+      // Clear existing timeout
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+
+      // Set new timeout to stop typing indicator
+      typingTimeoutRef.current = setTimeout(() => {
+        setIsTyping(false);
+        updateTypingStatus(false);
+      }, 2000); // Stop typing after 2 seconds of inactivity
+    } else if (isTyping && !text.trim()) {
+      setIsTyping(false);
+      updateTypingStatus(false);
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+    }
+  };
+
+  const updateTypingStatus = async (typing: boolean) => {
+    try {
+      await updateDoc(doc(db, "chats", chatId as string), {
+        [`typing.${user?.uid}`]: typing,
+      });
+    } catch (error) {
+      console.error("Error updating typing status:", error);
+    }
+  };
+
+  // Listen to typing status changes
+  useEffect(() => {
+    if (!participant?.id) return;
+
+    const chatRef = doc(db, "chats", chatId as string);
+    const unsubscribe = onSnapshot(chatRef, (doc) => {
+      const data = doc.data();
+      if (data?.typing?.[participant.id]) {
+        // Participant is typing
+        setParticipant(prev => prev ? { ...prev, isTyping: true } : null);
+      } else {
+        // Participant stopped typing
+        setParticipant(prev => prev ? { ...prev, isTyping: false } : null);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [participant?.id, chatId]);
+
+  // Cleanup typing status when component unmounts
+  useEffect(() => {
+    return () => {
+      if (isTyping) {
+        updateTypingStatus(false);
+      }
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+    };
+  }, [isTyping]);
+
   const sendMessage = async () => {
     if (editingMessage) {
       await editMessage();
@@ -218,6 +292,7 @@ export default function ChatScreen() {
         encrypted: false,
         status: "sent" as const,
         createdAt: new Date(),
+        readBy: [user.uid], // Mark as read by sender
       };
 
       await addDoc(collection(db, "messages"), messageDoc);
@@ -247,6 +322,11 @@ export default function ChatScreen() {
       ? (item.createdAt as any).toDate()
       : new Date(item.createdAt as any);
     const timeAgo = getTimeAgo(messageDate);
+
+    // Determine message status for own messages
+    const readBy = item.readBy || [];
+    const isRead = participant?.id && readBy.includes(participant.id);
+    const isDelivered = readBy.length > 1;
 
     const handleLongPress = () => {
       const now = new Date();
@@ -297,14 +377,27 @@ export default function ChatScreen() {
         >
           {item.content}
         </Text>
-        <Text
-          style={[
-            styles.messageTime,
-            isOwnMessage ? styles.ownMessageTime : styles.otherMessageTime,
-          ]}
-        >
-          {timeAgo}
-        </Text>
+        <View style={styles.messageFooter}>
+          <Text
+            style={[
+              styles.messageTime,
+              isOwnMessage ? styles.ownMessageTime : styles.otherMessageTime,
+            ]}
+          >
+            {timeAgo}
+          </Text>
+          {isOwnMessage && (
+            <View style={styles.statusContainer}>
+              {isRead ? (
+                <CheckCheck size={14} color="#007AFF" />
+              ) : isDelivered ? (
+                <CheckCheck size={14} color="#666" />
+              ) : (
+                <Check size={14} color="#666" />
+              )}
+            </View>
+          )}
+        </View>
       </TouchableOpacity>
     );
   };
@@ -372,7 +465,7 @@ export default function ChatScreen() {
           <TextInput
             style={styles.textInput}
             value={newMessage}
-            onChangeText={setNewMessage}
+            onChangeText={handleTextChange}
             placeholder={
               editingMessage ? "Edit message..." : "Type a message..."
             }
@@ -478,16 +571,23 @@ const styles = StyleSheet.create({
   otherMessageText: {
     color: "#1a1a1a",
   },
+  messageFooter: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 4,
+  },
   messageTime: {
     fontSize: 12,
-    marginTop: 4,
   },
   ownMessageTime: {
     color: "rgba(255, 255, 255, 0.7)",
-    textAlign: "right",
   },
   otherMessageTime: {
     color: "#999",
+  },
+  statusContainer: {
+    marginLeft: 4,
   },
   emptyContainer: {
     flex: 1,
