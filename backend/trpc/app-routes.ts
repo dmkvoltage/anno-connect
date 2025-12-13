@@ -6,6 +6,8 @@ import updateAvatarProcedure from "./routes/user/update-avatar/route";
 import discoverUsersProcedure from "./routes/user/discover/route";
 import sendRequestProcedure from "./routes/chat/send-request/route";
 import respondRequestProcedure from "./routes/chat/respond-request/route";
+import createRatingProcedure from "./routes/rating/create/route";
+import getUserRatingsProcedure from "./routes/rating/get-user-ratings/route";
 
 export const appRouter = createTRPCRouter({
   example: createTRPCRouter({
@@ -22,6 +24,10 @@ export const appRouter = createTRPCRouter({
   chat: createTRPCRouter({
     sendRequest: sendRequestProcedure,
     respondRequest: respondRequestProcedure,
+  }),
+  rating: createTRPCRouter({
+    create: createRatingProcedure,
+    getUserRatings: getUserRatingsProcedure,
   }),
 });
 

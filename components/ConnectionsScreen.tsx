@@ -13,6 +13,8 @@ import { useAuth } from "@/contexts/AuthContext";
 import { collection, query, where, onSnapshot, doc, getDoc, updateDoc, addDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { trpc } from "@/lib/trpc";
+import RateUserModal from "./RateUserModal";
+import { Star } from "lucide-react-native";
 import type { ChatRequest } from "@/types/chat";
 import type { Connection } from "@/types/connection";
 
@@ -26,6 +28,9 @@ interface RequestItem extends ChatRequest {
 interface FriendItem extends Connection {
   connectedUserUsername: string;
   connectedUserAvatar: string;
+  hasChatted: boolean;
+  rating: number;
+  verified: boolean;
 }
 
 export default function ConnectionsScreen() {
@@ -36,6 +41,8 @@ export default function ConnectionsScreen() {
   const [receivedRequests, setReceivedRequests] = useState<RequestItem[]>([]);
   const [friends, setFriends] = useState<FriendItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [rateModalVisible, setRateModalVisible] = useState(false);
+  const [selectedUserForRating, setSelectedUserForRating] = useState<FriendItem | null>(null);
 
   useEffect(() => {
     if (!user?.uid) return;
@@ -106,10 +113,20 @@ export default function ConnectionsScreen() {
         connections.map(async (conn) => {
           const connectedUserDoc = await getDoc(doc(db, 'users', conn.connectedUserId));
           const connectedUserData = connectedUserDoc.data();
+          const chatDoc = await getDoc(doc(db, 'chats', conn.chatId));
+          const chatData = chatDoc.data();
+
+          // Convert Firestore Timestamp to Date if needed
+          const createdAt = (conn.createdAt as any)?.toDate ? (conn.createdAt as any).toDate() : new Date(conn.createdAt as any);
+
           return {
             ...conn,
+            createdAt,
             connectedUserUsername: connectedUserData?.username || 'Unknown',
             connectedUserAvatar: connectedUserData?.avatar || '👤',
+            hasChatted: chatData?.lastMessage ? true : false,
+            rating: connectedUserData?.rating || 0,
+            verified: connectedUserData?.verified || false,
           };
         })
       );
@@ -232,18 +249,54 @@ export default function ConnectionsScreen() {
     </View>
   );
 
+  const handleRateUser = (user: FriendItem) => {
+    setSelectedUserForRating(user);
+    setRateModalVisible(true);
+  };
+
+  const handleRatingSubmitted = () => {
+    // Refresh friends list to show updated ratings
+    // The onSnapshot will automatically update the data
+  };
+
   const renderFriend = ({ item }: { item: FriendItem }) => (
-    <TouchableOpacity style={styles.friendCard} onPress={() => {
-      router.push(`/chat/${item.chatId}`);
-    }}>
-      <Text style={styles.friendAvatar}>{item.connectedUserAvatar}</Text>
-      <View style={styles.friendInfo}>
-        <Text style={styles.friendUsername}>{item.connectedUserUsername}</Text>
-        <Text style={styles.friendLastInteraction}>
-          Connected {new Date(item.createdAt).toLocaleDateString()}
-        </Text>
-      </View>
-    </TouchableOpacity>
+    <View style={styles.friendCard}>
+      <TouchableOpacity style={styles.friendMain} onPress={() => {
+        router.push(`/chat/${item.chatId}`);
+      }}>
+        <Text style={styles.friendAvatar}>{item.connectedUserAvatar}</Text>
+        <View style={styles.friendInfo}>
+          <View style={styles.friendHeader}>
+            <Text style={styles.friendUsername}>{item.connectedUserUsername}</Text>
+            {item.verified && (
+              <View style={styles.verifiedBadge}>
+                <Star size={12} color="#007AFF" fill="#007AFF" />
+              </View>
+            )}
+          </View>
+          <View style={styles.friendStats}>
+            <View style={styles.stat}>
+              <Star size={12} color="#FFB800" fill="#FFB800" />
+              <Text style={styles.statText}>
+                {item.rating > 0 ? item.rating.toFixed(1) : "New"}
+              </Text>
+            </View>
+          </View>
+          <Text style={styles.friendLastInteraction}>
+            Connected {item.createdAt.toLocaleDateString()}
+          </Text>
+        </View>
+      </TouchableOpacity>
+      {item.hasChatted && (
+        <TouchableOpacity
+          style={styles.rateButton}
+          onPress={() => handleRateUser(item)}
+        >
+          <Star size={16} color="#FFB800" />
+          <Text style={styles.rateButtonText}>Rate</Text>
+        </TouchableOpacity>
+      )}
+    </View>
   );
 
   const renderContent = () => {
@@ -331,6 +384,14 @@ export default function ConnectionsScreen() {
         </TouchableOpacity>
       </View>
       {renderContent()}
+
+      <RateUserModal
+        visible={rateModalVisible}
+        onClose={() => setRateModalVisible(false)}
+        userId={selectedUserForRating?.connectedUserId || ''}
+        username={selectedUserForRating?.connectedUserUsername || ''}
+        onRatingSubmitted={handleRatingSubmitted}
+      />
     </View>
   );
 }
@@ -441,6 +502,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
   },
+  friendMain: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+  },
   friendAvatar: {
     fontSize: 48,
     marginRight: 12,
@@ -448,15 +514,52 @@ const styles = StyleSheet.create({
   friendInfo: {
     flex: 1,
   },
+  friendHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 4,
+  },
   friendUsername: {
     fontSize: 18,
     fontWeight: "700" as const,
     color: "#1a1a1a",
-    marginBottom: 2,
+  },
+  verifiedBadge: {
+    marginLeft: 6,
+  },
+  friendStats: {
+    marginBottom: 4,
+  },
+  stat: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  statText: {
+    fontSize: 12,
+    color: "#666",
   },
   friendLastInteraction: {
     fontSize: 12,
     color: "#666",
+  },
+  rateButton: {
+    flexDirection: "row",
+    backgroundColor: "#FFF7E0",
+    borderRadius: 12,
+    padding: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    borderWidth: 1,
+    borderColor: "#FFB800",
+    marginLeft: 12,
+  },
+  rateButtonText: {
+    color: "#FFB800",
+    fontSize: 14,
+    fontWeight: "600" as const,
   },
   emptyContainer: {
     alignItems: "center",

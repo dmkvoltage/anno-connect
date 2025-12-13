@@ -11,7 +11,9 @@ import {
   StatusBar,
   Platform,
   ActivityIndicator,
-  Alert,
+  Modal,
+  Animated,
+  Pressable,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter, Stack } from "expo-router";
@@ -27,9 +29,10 @@ import {
   getDoc,
   updateDoc,
   deleteDoc,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { ArrowLeft, Send, Check, CheckCheck } from "lucide-react-native";
+import { ArrowLeft, Send, Check, CheckCheck, Edit3, Trash2, X, Shield } from "lucide-react-native";
 import type { Message } from "@/types/chat";
 
 interface ChatMessage extends Message {
@@ -42,6 +45,7 @@ interface ChatParticipant {
   id: string;
   username: string;
   avatar: string;
+  verified: boolean;
   isTyping?: boolean;
 }
 
@@ -71,12 +75,14 @@ export default function ChatScreen() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [participant, setParticipant] = useState<ChatParticipant | null>(null);
-  const [editingMessage, setEditingMessage] = useState<ChatMessage | null>(
-    null
-  );
+  const [editingMessage, setEditingMessage] = useState<ChatMessage | null>(null);
   const [isTyping, setIsTyping] = useState(false);
+  const [showActionSheet, setShowActionSheet] = useState(false);
+  const [selectedMessage, setSelectedMessage] = useState<ChatMessage | null>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flatListRef = useRef<FlatList>(null);
+  const hasMarkedAsRead = useRef(false);
+  const slideAnim = useRef(new Animated.Value(300)).current;
 
   useEffect(() => {
     if (!chatId || !user?.uid) return;
@@ -102,6 +108,7 @@ export default function ChatScreen() {
               id: otherParticipantId,
               username: participantData?.username || "Unknown",
               avatar: participantData?.avatar || "👤",
+              verified: participantData?.verified || false,
             });
           }
         }
@@ -119,7 +126,7 @@ export default function ChatScreen() {
       orderBy("createdAt", "asc")
     );
 
-    const unsubscribe = onSnapshot(messagesQuery, (snapshot) => {
+    const unsubscribe = onSnapshot(messagesQuery, async (snapshot) => {
       const messagesData = snapshot.docs.map((doc) => ({
         id: doc.id,
         ...doc.data(),
@@ -133,113 +140,55 @@ export default function ChatScreen() {
 
       setMessages(filteredMessages);
       setLoading(false);
+
+      // Mark unread messages as read and update delivery status
+      if (!hasMarkedAsRead.current && filteredMessages.length > 0) {
+        hasMarkedAsRead.current = true;
+        await markMessagesAsRead(filteredMessages);
+      }
     });
 
     return () => unsubscribe();
   }, [chatId, user?.uid]);
 
-  const startEditing = (message: ChatMessage) => {
-    setEditingMessage(message);
-    setNewMessage(message.content);
-  };
-
-  const deleteMessageForEveryone = async (messageId: string) => {
+  // Mark messages as read when user enters chat
+  const markMessagesAsRead = async (messagesToMark: ChatMessage[]) => {
     try {
-      await deleteDoc(doc(db, "messages", messageId));
-      Alert.alert("Success", "Message deleted for everyone");
-    } catch (error) {
-      console.error("Error deleting message:", error);
-      Alert.alert("Error", "Failed to delete message");
-    }
-  };
+      const batch = writeBatch(db);
+      let unreadCount = 0;
 
-  const deleteMessageForMe = async (messageId: string) => {
-    try {
-      // Add current user to deletedBy array
-      const messageRef = doc(db, "messages", messageId);
-      await updateDoc(messageRef, {
-        deletedBy: [
-          ...((await getDoc(messageRef)).data()?.deletedBy || []),
-          user?.uid,
-        ],
-      });
-      Alert.alert("Success", "Message deleted from your chat");
-    } catch (error) {
-      console.error("Error deleting message for me:", error);
-      Alert.alert("Error", "Failed to delete message");
-    }
-  };
-
-  const editMessage = async () => {
-    if (!editingMessage || !newMessage.trim() || sending) return;
-
-    setSending(true);
-    try {
-      await updateDoc(doc(db, "messages", editingMessage.id), {
-        content: newMessage.trim(),
-        editedAt: new Date(),
+      messagesToMark.forEach((msg) => {
+        const readBy = msg.readBy || [];
+        
+        // If message is not from current user and not already read
+        if (msg.senderId !== user?.uid && !readBy.includes(user?.uid || "")) {
+          unreadCount++;
+          const messageRef = doc(db, "messages", msg.id);
+          batch.update(messageRef, {
+            readBy: [...readBy, user?.uid],
+            status: 'read'
+          });
+        } else if (msg.senderId !== user?.uid && !readBy.includes(user?.uid || "")) {
+          // Mark as delivered if not already
+          const messageRef = doc(db, "messages", msg.id);
+          batch.update(messageRef, {
+            readBy: [...readBy, user?.uid],
+            status: 'delivered'
+          });
+        }
       });
 
-      // Update chat last message if this was the last message
-      await updateDoc(doc(db, "chats", chatId as string), {
-        lastMessage: {
-          content: newMessage.trim(),
-          senderId: user?.uid,
-          createdAt: editingMessage.createdAt,
-        },
-        lastActivity: new Date(),
-      });
-
-      setEditingMessage(null);
-      setNewMessage("");
-    } catch (error) {
-      Alert.alert("Error", "Failed to edit message");
-    } finally {
-      setSending(false);
-    }
-  };
-
-  const cancelEditing = () => {
-    setEditingMessage(null);
-    setNewMessage("");
-  };
-
-  const handleTextChange = (text: string) => {
-    setNewMessage(text);
-
-    // Handle typing indicator
-    if (!editingMessage && text.trim()) {
-      if (!isTyping) {
-        setIsTyping(true);
-        updateTypingStatus(true);
+      // Reset unread count for this user
+      if (unreadCount > 0) {
+        const chatRef = doc(db, "chats", chatId as string);
+        batch.update(chatRef, {
+          [`unreadCount.${user?.uid}`]: 0,
+        });
       }
 
-      // Clear existing timeout
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-      }
-
-      // Set new timeout to stop typing indicator
-      typingTimeoutRef.current = setTimeout(() => {
-        setIsTyping(false);
-        updateTypingStatus(false);
-      }, 2000); // Stop typing after 2 seconds of inactivity
-    } else if (isTyping && !text.trim()) {
-      setIsTyping(false);
-      updateTypingStatus(false);
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-      }
-    }
-  };
-
-  const updateTypingStatus = async (typing: boolean) => {
-    try {
-      await updateDoc(doc(db, "chats", chatId as string), {
-        [`typing.${user?.uid}`]: typing,
-      });
+      await batch.commit();
     } catch (error) {
-      console.error("Error updating typing status:", error);
+      console.error("Error marking messages as read:", error);
     }
   };
 
@@ -251,10 +200,8 @@ export default function ChatScreen() {
     const unsubscribe = onSnapshot(chatRef, (doc) => {
       const data = doc.data();
       if (data?.typing?.[participant.id]) {
-        // Participant is typing
         setParticipant(prev => prev ? { ...prev, isTyping: true } : null);
       } else {
-        // Participant stopped typing
         setParticipant(prev => prev ? { ...prev, isTyping: false } : null);
       }
     });
@@ -274,6 +221,150 @@ export default function ChatScreen() {
     };
   }, [isTyping]);
 
+  // Animate action sheet
+  useEffect(() => {
+    if (showActionSheet) {
+      Animated.spring(slideAnim, {
+        toValue: 0,
+        useNativeDriver: true,
+        tension: 65,
+        friction: 11,
+      }).start();
+    } else {
+      Animated.timing(slideAnim, {
+        toValue: 300,
+        duration: 200,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [showActionSheet]);
+
+  const openActionSheet = (message: ChatMessage) => {
+    setSelectedMessage(message);
+    setShowActionSheet(true);
+  };
+
+  const closeActionSheet = () => {
+    setShowActionSheet(false);
+    setTimeout(() => setSelectedMessage(null), 200);
+  };
+
+  const startEditing = (message: ChatMessage) => {
+    setEditingMessage(message);
+    setNewMessage(message.content);
+    closeActionSheet();
+  };
+
+  const deleteMessageForEveryone = async () => {
+    if (!selectedMessage) return;
+    try {
+      await deleteDoc(doc(db, "messages", selectedMessage.id));
+      closeActionSheet();
+    } catch (error) {
+      console.error("Error deleting message:", error);
+    }
+  };
+
+  const deleteMessageForMe = async () => {
+    if (!selectedMessage) return;
+    try {
+      const messageRef = doc(db, "messages", selectedMessage.id);
+      await updateDoc(messageRef, {
+        deletedBy: [
+          ...((await getDoc(messageRef)).data()?.deletedBy || []),
+          user?.uid,
+        ],
+      });
+      closeActionSheet();
+    } catch (error) {
+      console.error("Error deleting message for me:", error);
+    }
+  };
+
+  const editMessage = async () => {
+    if (!editingMessage || !newMessage.trim() || sending) return;
+
+    setSending(true);
+    try {
+      await updateDoc(doc(db, "messages", editingMessage.id), {
+        content: newMessage.trim(),
+        editedAt: new Date(),
+      });
+
+      // Update chat last message if this was the last message
+      const chatRef = doc(db, "chats", chatId as string);
+      const chatSnap = await getDoc(chatRef);
+      const chatData = chatSnap.data();
+      
+      const lastMessageTime = (chatData?.lastMessage?.createdAt as any)?.toDate
+        ? (chatData?.lastMessage?.createdAt as any).toDate().getTime()
+        : new Date(chatData?.lastMessage?.createdAt as any).getTime();
+      const editingMessageTime = (editingMessage.createdAt as any)?.toDate
+        ? (editingMessage.createdAt as any).toDate().getTime()
+        : new Date(editingMessage.createdAt as any).getTime();
+      
+      if (lastMessageTime === editingMessageTime) {
+        await updateDoc(chatRef, {
+          lastMessage: {
+            content: newMessage.trim(),
+            senderId: user?.uid,
+            createdAt: editingMessage.createdAt,
+            readBy: editingMessage.readBy || [user?.uid],
+          },
+          lastActivity: new Date(),
+        });
+      }
+
+      setEditingMessage(null);
+      setNewMessage("");
+    } catch (error) {
+      console.error("Error editing message:", error);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const cancelEditing = () => {
+    setEditingMessage(null);
+    setNewMessage("");
+  };
+
+  const handleTextChange = (text: string) => {
+    setNewMessage(text);
+
+    if (!editingMessage && text.trim()) {
+      if (!isTyping) {
+        setIsTyping(true);
+        updateTypingStatus(true);
+      }
+
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+
+      typingTimeoutRef.current = setTimeout(() => {
+        setIsTyping(false);
+        updateTypingStatus(false);
+      }, 2000);
+    } else if (isTyping && !text.trim()) {
+      setIsTyping(false);
+      updateTypingStatus(false);
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+    }
+  };
+
+  const updateTypingStatus = async (typing: boolean) => {
+    try {
+      await updateDoc(doc(db, "chats", chatId as string), {
+        [`typing.${user?.uid}`]: typing,
+      });
+    } catch (error) {
+      console.error("Error updating typing status:", error);
+    }
+  };
+
   const sendMessage = async () => {
     if (editingMessage) {
       await editMessage();
@@ -292,22 +383,35 @@ export default function ChatScreen() {
         encrypted: false,
         status: "sent" as const,
         createdAt: new Date(),
-        readBy: [user.uid], // Mark as read by sender
+        readBy: [user.uid],
       };
 
-      await addDoc(collection(db, "messages"), messageDoc);
+      const messageRef = await addDoc(collection(db, "messages"), messageDoc);
 
-      // Update chat last message and activity
-      await updateDoc(doc(db, "chats", chatId as string), {
+      // Update chat last message and increment unread count
+      const chatRef = doc(db, "chats", chatId as string);
+      const chatSnap = await getDoc(chatRef);
+      const chatData = chatSnap.data();
+      const currentUnreadCount = chatData?.unreadCount?.[participant?.id || ''] || 0;
+
+      await updateDoc(chatRef, {
         lastMessage: {
           content: newMessage.trim(),
           senderId: user.uid,
           createdAt: new Date(),
+          readBy: [user.uid],
         },
         lastActivity: new Date(),
+        [`unreadCount.${participant?.id}`]: currentUnreadCount + 1,
       });
 
       setNewMessage("");
+      
+      // Clear typing status
+      if (isTyping) {
+        setIsTyping(false);
+        updateTypingStatus(false);
+      }
     } catch (error) {
       console.error("Error sending message:", error);
     } finally {
@@ -317,7 +421,6 @@ export default function ChatScreen() {
 
   const renderMessage = ({ item }: { item: ChatMessage }) => {
     const isOwnMessage = item.senderId === user?.uid;
-    // Handle Firestore Timestamp or regular Date
     const messageDate = (item.createdAt as any)?.toDate
       ? (item.createdAt as any).toDate()
       : new Date(item.createdAt as any);
@@ -329,35 +432,7 @@ export default function ChatScreen() {
     const isDelivered = readBy.length > 1;
 
     const handleLongPress = () => {
-      const now = new Date();
-      const messageTime = messageDate;
-      const diffMinutes = (now.getTime() - messageTime.getTime()) / (1000 * 60);
-
-      const options = [];
-
-      if (isOwnMessage && diffMinutes <= 40) {
-        options.push(
-          { text: "Edit", onPress: () => startEditing(item) },
-          {
-            text: "Delete for everyone",
-            style: "destructive" as const,
-            onPress: () => deleteMessageForEveryone(item.id),
-          }
-        );
-      } else if (!isOwnMessage) {
-        options.push({
-          text: "Delete for me",
-          style: "destructive" as const,
-          onPress: () => deleteMessageForMe(item.id),
-        });
-      }
-
-      if (options.length > 0) {
-        Alert.alert("Message Options", "Choose an action", [
-          ...options,
-          { text: "Cancel", style: "cancel" as const },
-        ]);
-      }
+      openActionSheet(item);
     };
 
     return (
@@ -368,6 +443,7 @@ export default function ChatScreen() {
         ]}
         onLongPress={handleLongPress}
         delayLongPress={500}
+        activeOpacity={0.7}
       >
         <Text
           style={[
@@ -389,16 +465,109 @@ export default function ChatScreen() {
           {isOwnMessage && (
             <View style={styles.statusContainer}>
               {isRead ? (
-                <CheckCheck size={14} color="#007AFF" />
+                <CheckCheck size={16} color="#4CAF50" />
               ) : isDelivered ? (
-                <CheckCheck size={14} color="#666" />
+                <CheckCheck size={16} color="rgba(255, 255, 255, 0.7)" />
               ) : (
-                <Check size={14} color="#666" />
+                <Check size={16} color="rgba(255, 255, 255, 0.7)" />
               )}
             </View>
           )}
         </View>
       </TouchableOpacity>
+    );
+  };
+
+  const renderActionSheet = () => {
+    if (!selectedMessage) return null;
+
+    const isOwnMessage = selectedMessage.senderId === user?.uid;
+    const messageDate = (selectedMessage.createdAt as any)?.toDate
+      ? (selectedMessage.createdAt as any).toDate()
+      : new Date(selectedMessage.createdAt as any);
+    const now = new Date();
+    const diffMinutes = (now.getTime() - messageDate.getTime()) / (1000 * 60);
+    const canEdit = isOwnMessage && diffMinutes <= 40;
+
+    return (
+      <Modal
+        visible={showActionSheet}
+        transparent
+        animationType="fade"
+        onRequestClose={closeActionSheet}
+      >
+        <Pressable style={styles.modalOverlay} onPress={closeActionSheet}>
+          <Pressable style={styles.actionSheetContainer} onPress={(e) => e.stopPropagation()}>
+            <Animated.View
+              style={[
+                styles.actionSheet,
+                {
+                  transform: [{ translateY: slideAnim }],
+                },
+              ]}
+            >
+              {/* Header */}
+              <View style={styles.actionSheetHeader}>
+                <Text style={styles.actionSheetTitle}>Message Options</Text>
+                <TouchableOpacity onPress={closeActionSheet} style={styles.closeButton}>
+                  <X size={24} color="#666" />
+                </TouchableOpacity>
+              </View>
+
+              {/* Actions */}
+              <View style={styles.actionsList}>
+                {canEdit && (
+                  <>
+                    <TouchableOpacity
+                      style={styles.actionItem}
+                      onPress={() => startEditing(selectedMessage)}
+                    >
+                      <View style={[styles.actionIconContainer, styles.editIconBg]}>
+                        <Edit3 size={20} color="#007AFF" />
+                      </View>
+                      <Text style={styles.actionText}>Edit Message</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.actionItem}
+                      onPress={deleteMessageForEveryone}
+                    >
+                      <View style={[styles.actionIconContainer, styles.deleteIconBg]}>
+                        <Trash2 size={20} color="#FF3B30" />
+                      </View>
+                      <Text style={[styles.actionText, styles.deleteText]}>
+                        Delete for Everyone
+                      </Text>
+                    </TouchableOpacity>
+                  </>
+                )}
+
+                {!isOwnMessage && (
+                  <TouchableOpacity
+                    style={styles.actionItem}
+                    onPress={deleteMessageForMe}
+                  >
+                    <View style={[styles.actionIconContainer, styles.deleteIconBg]}>
+                      <Trash2 size={20} color="#FF3B30" />
+                    </View>
+                    <Text style={[styles.actionText, styles.deleteText]}>
+                      Delete for Me
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {/* Cancel Button */}
+              <TouchableOpacity
+                style={styles.cancelButton}
+                onPress={closeActionSheet}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+            </Animated.View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     );
   };
 
@@ -429,7 +598,17 @@ export default function ChatScreen() {
           </TouchableOpacity>
           <View style={styles.headerInfo}>
             <Text style={styles.headerAvatar}>{participant?.avatar}</Text>
-            <Text style={styles.headerUsername}>{participant?.username}</Text>
+            <View>
+              <View style={styles.usernameRow}>
+                <Text style={styles.headerUsername}>{participant?.username}</Text>
+                {participant?.verified && (
+                  <Shield size={16} color="#007AFF" fill="#007AFF" />
+                )}
+              </View>
+              {participant?.isTyping && (
+                <Text style={styles.typingIndicator}>typing...</Text>
+              )}
+            </View>
           </View>
         </View>
 
@@ -455,6 +634,19 @@ export default function ChatScreen() {
           }
         />
 
+        {/* Editing Bar */}
+        {editingMessage && (
+          <View style={styles.editingBar}>
+            <View style={styles.editingInfo}>
+              <Edit3 size={16} color="#007AFF" />
+              <Text style={styles.editingText}>Editing message</Text>
+            </View>
+            <TouchableOpacity onPress={cancelEditing}>
+              <X size={20} color="#666" />
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Input */}
         <View
           style={[
@@ -473,27 +665,24 @@ export default function ChatScreen() {
             multiline
             maxLength={1000}
           />
-          <View style={styles.inputButtons}>
-            {editingMessage && (
-              <TouchableOpacity
-                style={styles.cancelButton}
-                onPress={cancelEditing}
-              >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity
-              style={[
-                styles.sendButton,
-                (!newMessage.trim() || sending) && styles.sendButtonDisabled,
-              ]}
-              onPress={sendMessage}
-              disabled={!newMessage.trim() || sending}
-            >
+          <TouchableOpacity
+            style={[
+              styles.sendButton,
+              (!newMessage.trim() || sending) && styles.sendButtonDisabled,
+            ]}
+            onPress={sendMessage}
+            disabled={!newMessage.trim() || sending}
+          >
+            {sending ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
               <Send size={20} color="#fff" />
-            </TouchableOpacity>
-          </View>
+            )}
+          </TouchableOpacity>
         </View>
+
+        {/* Action Sheet */}
+        {renderActionSheet()}
       </KeyboardAvoidingView>
     </React.Fragment>
   );
@@ -533,10 +722,21 @@ const styles = StyleSheet.create({
     fontSize: 32,
     marginRight: 12,
   },
+  usernameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
   headerUsername: {
     fontSize: 20,
     fontWeight: "600",
     color: "#1a1a1a",
+  },
+  typingIndicator: {
+    fontSize: 12,
+    color: "#4CAF50",
+    fontStyle: "italic",
+    marginTop: 2,
   },
   messagesContainer: {
     flexGrow: 1,
@@ -562,8 +762,8 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   messageText: {
-    fontSize: 18,
-    lineHeight: 22,
+    fontSize: 16,
+    lineHeight: 20,
   },
   ownMessageText: {
     color: "#fff",
@@ -573,12 +773,13 @@ const styles = StyleSheet.create({
   },
   messageFooter: {
     flexDirection: "row",
-    justifyContent: "space-between",
+    justifyContent: "flex-end",
     alignItems: "center",
     marginTop: 4,
+    gap: 4,
   },
   messageTime: {
-    fontSize: 12,
+    fontSize: 11,
   },
   ownMessageTime: {
     color: "rgba(255, 255, 255, 0.7)",
@@ -587,7 +788,7 @@ const styles = StyleSheet.create({
     color: "#999",
   },
   statusContainer: {
-    marginLeft: 4,
+    marginLeft: 2,
   },
   emptyContainer: {
     flex: 1,
@@ -605,6 +806,25 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#999",
   },
+  editingBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: 12,
+    backgroundColor: "#E3F2FD",
+    borderTopWidth: 1,
+    borderTopColor: "#BBDEFB",
+  },
+  editingInfo: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  editingText: {
+    fontSize: 14,
+    color: "#007AFF",
+    fontWeight: "500",
+  },
   inputContainer: {
     flexDirection: "row",
     alignItems: "flex-end",
@@ -612,6 +832,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
     borderTopWidth: 1,
     borderTopColor: "#e0e0e0",
+    gap: 8,
   },
   textInput: {
     flex: 1,
@@ -619,34 +840,10 @@ const styles = StyleSheet.create({
     maxHeight: 100,
     padding: 12,
     paddingRight: 16,
-    backgroundColor: "#fff",
+    backgroundColor: "#f8f8f8",
     borderRadius: 20,
-    borderWidth: 1,
-    borderColor: "#e0e0e0",
     fontSize: 16,
     color: "#1a1a1a",
-    marginRight: 8,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  inputButtons: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  cancelButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: "#f5f5f5",
-    borderRadius: 16,
-  },
-  cancelButtonText: {
-    fontSize: 14,
-    color: "#666",
-    fontWeight: "500",
   },
   sendButton: {
     width: 40,
@@ -658,5 +855,79 @@ const styles = StyleSheet.create({
   },
   sendButtonDisabled: {
     backgroundColor: "#ccc",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "flex-end",
+  },
+  actionSheetContainer: {
+    justifyContent: "flex-end",
+  },
+  actionSheet: {
+    backgroundColor: "#fff",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingBottom: 20,
+  },
+  actionSheetHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f0f0f0",
+  },
+  actionSheetTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#1a1a1a",
+  },
+  closeButton: {
+    padding: 4,
+  },
+  actionsList: {
+    paddingHorizontal: 20,
+    paddingTop: 8,
+  },
+  actionItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 16,
+    gap: 16,
+  },
+  actionIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  editIconBg: {
+    backgroundColor: "#E3F2FD",
+  },
+  deleteIconBg: {
+    backgroundColor: "#FFEBEE",
+  },
+  actionText: {
+    fontSize: 16,
+    color: "#1a1a1a",
+    fontWeight: "500",
+  },
+  deleteText: {
+    color: "#FF3B30",
+  },
+  cancelButton: {
+    marginHorizontal: 20,
+    marginTop: 12,
+    padding: 16,
+    backgroundColor: "#f8f8f8",
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  cancelButtonText: {
+    fontSize: 16,
+    color: "#666",
+    fontWeight: "600",
   },
 });

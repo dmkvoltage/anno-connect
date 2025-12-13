@@ -1,7 +1,7 @@
-import { initializeApp, getApps } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
-import { getStorage } from 'firebase/storage';
+import firebase from "firebase/compat/app";
+import "firebase/compat/auth";
+import "firebase/compat/firestore";
+import "firebase/compat/storage";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBGwhj5icQLJ-nT9b0_ByWWfHJixrqYBWI",
@@ -9,19 +9,14 @@ const firebaseConfig = {
   projectId: "kingoauth-25355",
   storageBucket: "kingoauth-25355.appspot.com",
   messagingSenderId: "350746585050",
-  appId: "1:350746585050:android:71d27027535ee04a5ec2e3"
+  appId: "1:350746585050:android:71d27027535ee04a5ec2e3",
 };
 
-let app;
-if (getApps().length === 0) {
-  app = initializeApp(firebaseConfig);
-} else {
-  app = getApps()[0];
+if (!firebase.apps.length) {
+  firebase.initializeApp(firebaseConfig);
 }
 
-const auth = getAuth(app);
-
-export const db = getFirestore(app);
-export const storage = getStorage(app);
-export { auth };
-export default app;
+export const auth = firebase.auth();
+export const db = firebase.firestore();
+export const storage = firebase.storage();
+export default firebase;
