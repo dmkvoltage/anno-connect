@@ -33,7 +33,7 @@ import {
   getDoc,
   updateDoc,
   deleteDoc,
-  writeBatch,
+  setDoc,
 } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { ArrowLeft, Send, Edit3, Trash2, X, Shield } from "lucide-react-native"
@@ -84,6 +84,7 @@ export default function ChatDetail() {
   const [isTyping, setIsTyping] = useState(false)
   const [showActionSheet, setShowActionSheet] = useState(false)
   const [selectedMessage, setSelectedMessage] = useState<ChatMessage | null>(null)
+  const [lastReadAt, setLastReadAt] = useState<Date | null>(null)
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const flatListRef = useRef<FlatList>(null)
   const initialScrollIndex = useRef<number | null>(null)
@@ -95,6 +96,66 @@ export default function ChatDetail() {
     itemVisiblePercentThreshold: 50,
   }).current
   const isNearBottom = useRef(true)
+
+  const handleLayout = () => {
+    // Handle layout changes here
+  }
+
+const lastReadWriteTs = useRef(0)
+const didComputeInitialIndex = useRef(false)
+
+
+  const handleScroll = (event: any) => {
+    const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent
+    const paddingToBottom = 50
+    isNearBottom.current = layoutMeasurement.height + contentOffset.y >= contentSize.height - paddingToBottom
+  }
+
+  const onViewableItemsChanged = useRef(({ viewableItems }: any) => {
+    if (!user?.uid || !chatId || !lastReadAt) return
+
+    const now = Date.now()
+    if (now - lastReadWriteTs.current < 1500) return
+
+    const hasUnreadVisible = viewableItems.some((v: any) => {
+      const msg = v.item
+      const messageDate =
+        (msg.createdAt as any)?.toDate?.() ?? new Date(msg.createdAt)
+
+      return (
+        msg.senderId !== user.uid &&
+        (!lastReadAt || messageDate > lastReadAt)
+      )
+    })
+
+    if (hasUnreadVisible) {
+      lastReadWriteTs.current = now
+
+      updateLastReadAt(chatId as string, user.uid)
+      setLastReadAt(new Date())
+    }
+  }).current
+
+
+  useEffect(() => {
+    if (!chatId || !user?.uid) return
+
+    const fetchLastReadAt = async () => {
+      try {
+        const readStatusDoc = await getDoc(doc(db, "chats", chatId as string, "readStatus", user.uid))
+        if (readStatusDoc.exists()) {
+          const data = readStatusDoc.data()
+          if (data?.lastReadAt) {
+            setLastReadAt(data.lastReadAt.toDate())
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching lastReadAt:", error)
+      }
+    }
+
+    fetchLastReadAt()
+  }, [chatId, user?.uid])
 
   useEffect(() => {
     if (!chatId || !user?.uid) return
@@ -150,100 +211,65 @@ export default function ChatDetail() {
   }, [chatId, user?.uid])
 
   useEffect(() => {
-    if (!messages.length || initialScrollIndex.current !== null) return
-
-    const firstUnreadIndex = messages.findIndex(
-      (msg) => msg.senderId !== user?.uid && !msg.readBy?.includes(user?.uid || ""),
+    if (
+      !messages.length ||
+      didComputeInitialIndex.current ||
+      lastReadAt === undefined
     )
+      return
 
-    initialScrollIndex.current = firstUnreadIndex !== -1 ? firstUnreadIndex : messages.length - 1
-  }, [messages, user?.uid])
+    didComputeInitialIndex.current = true
 
-  const handleLayout = () => {
-    if (didInitialScroll.current || initialScrollIndex.current === null) return
+    const firstUnreadIndex = messages.findIndex((msg) => {
+      const messageDate =
+        (msg.createdAt as any)?.toDate?.() ?? new Date(msg.createdAt)
+
+      return (
+        msg.senderId !== user?.uid &&
+        (!lastReadAt || messageDate > lastReadAt)
+      )
+    })
+
+    initialScrollIndex.current =
+      firstUnreadIndex !== -1 ? firstUnreadIndex : messages.length - 1
+  }, [messages, lastReadAt, user?.uid])
+
+
+  useEffect(() => {
+    if (
+      !chatId ||
+      !user?.uid ||
+      hasResetUnreadCount.current ||
+      !messages.length
+    )
+      return
+
+    hasResetUnreadCount.current = true
+
+    updateDoc(doc(db, "chats", chatId as string), {
+      [`unreadCount.${user.uid}`]: 0,
+    }).catch(() => {})
+  }, [chatId, user?.uid, messages.length])
+
+
+  useEffect(() => {
+    if (
+      didInitialScroll.current ||
+      initialScrollIndex.current === null ||
+      !flatListRef.current
+    )
+      return
 
     didInitialScroll.current = true
 
     InteractionManager.runAfterInteractions(() => {
-      if (flatListRef.current && initialScrollIndex.current !== null) {
-        flatListRef.current.scrollToIndex({
-          index: initialScrollIndex.current,
-          animated: false,
-          viewPosition: initialScrollIndex.current === messages.length - 1 ? 1 : 0.1,
-        })
-      }
-    })
-  }
-
-  const handleScroll = (event: any) => {
-    const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent
-    const padding = 40
-
-    isNearBottom.current = layoutMeasurement.height + contentOffset.y >= contentSize.height - padding
-  }
-
-  useEffect(() => {
-    if (!user?.uid || !chatId) return
-
-    updateDoc(doc(db, "chats", chatId as string), {
-      [`unreadCount.${user.uid}`]: 0,
-    }).catch((error) => {
-      console.error("Error resetting unread count:", error)
-    })
-  }, [messages.length, chatId, user?.uid])
-
-  const markMessagesAsRead = async (messageIds: string[]) => {
-    if (!user?.uid || !chatId || messageIds.length === 0) return
-
-    try {
-      const batch = writeBatch(db)
-
-      for (const messageId of messageIds) {
-        const messageRef = doc(db, "messages", messageId)
-        const messageDoc = await getDoc(messageRef)
-        const currentReadBy = messageDoc.data()?.readBy || []
-
-        if (!currentReadBy.includes(user.uid)) {
-          batch.update(messageRef, {
-            readBy: [...currentReadBy, user.uid],
-          })
-        }
-      }
-
-      await batch.commit()
-
-      const lastMessage = messages[messages.length - 1]
-      if (lastMessage && messageIds.includes(lastMessage.id) && lastMessage.senderId !== user.uid) {
-        const chatRef = doc(db, "chats", chatId as string)
-        const chatSnap = await getDoc(chatRef)
-        const chatData = chatSnap.data()
-
-        if (chatData?.lastMessage?.senderId === lastMessage.senderId) {
-          await updateDoc(chatRef, {
-            "lastMessage.readBy": [...(chatData.lastMessage.readBy || []), user.uid],
-          })
-        }
-      }
-    } catch (error) {
-      console.error("Error marking messages as read:", error)
-    }
-  }
-
-  const onViewableItemsChanged = useRef(({ viewableItems }: any) => {
-    if (!user?.uid || !chatId) return
-
-    const visibleUnreadMessages = viewableItems
-      .map((item: any) => item.item)
-      .filter((msg: ChatMessage) => {
-        const readBy = msg.readBy || []
-        return msg.senderId !== user?.uid && !readBy.includes(user?.uid || "")
+      flatListRef.current?.scrollToIndex({
+        index: initialScrollIndex.current!,
+        animated: false,
       })
+    })
+  }, [messages])
 
-    if (visibleUnreadMessages.length > 0) {
-      const messageIds = visibleUnreadMessages.map((msg: ChatMessage) => msg.id)
-      markMessagesAsRead(messageIds)
-    }
-  }).current
 
   useEffect(() => {
     if (!participant?.id) return
@@ -460,11 +486,12 @@ export default function ChatDetail() {
 
     setMessages((prev) => [...prev, tempMessage])
 
-    if (isNearBottom.current) {
-      InteractionManager.runAfterInteractions(() => {
-        flatListRef.current?.scrollToEnd({ animated: false })
-      })
-    }
+  if (isNearBottom.current) {
+    InteractionManager.runAfterInteractions(() => {
+      flatListRef.current?.scrollToEnd({ animated: false })
+    })
+  }
+
 
     setSending(true)
     try {
@@ -519,7 +546,7 @@ export default function ChatDetail() {
     // Determine message status for own messages
     const readBy = item.readBy || []
     const isRead = participant?.id && readBy.includes(participant.id)
-    const isDelivered = item.status === "delivered" || readBy.length > 1
+    const isDelivered = readBy.length > 1 // Sender + at least one other
 
     // Find the replied message if this is a reply
     const repliedMessage = item.replyTo ? messages.find((msg) => msg.id === item.replyTo) : null
@@ -848,6 +875,16 @@ export default function ChatDetail() {
   )
 }
 
+const updateLastReadAt = async (chatId: string, userId: string) => {
+  if (!userId || !chatId) return
+
+  try {
+    await setDoc(doc(db, "chats", chatId as string, "readStatus", userId), { lastReadAt: new Date() }, { merge: true })
+  } catch (error) {
+    console.error("Error updating lastReadAt:", error)
+  }
+}
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -1044,8 +1081,8 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   replyingMessagePreview: {
-    fontSize: 14,
-    color: "#667781",
+    fontSize: 13,
+    lineHeight: 17,
   },
   replyIndicator: {
     flexDirection: "row",
