@@ -16,6 +16,7 @@ import {
   Animated,
   Pressable,
   Keyboard,
+  InteractionManager,
 } from "react-native"
 import { PanGestureHandler, State } from "react-native-gesture-handler"
 import { useSafeAreaInsets } from "react-native-safe-area-context"
@@ -32,6 +33,7 @@ import {
   getDoc,
   updateDoc,
   deleteDoc,
+  writeBatch,
 } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { ArrowLeft, Send, Edit3, Trash2, X, Shield } from "lucide-react-native"
@@ -67,7 +69,7 @@ const getTimeAgo = (date: Date) => {
   return date.toLocaleDateString()
 }
 
-export default function ChatScreen() {
+export default function ChatDetail() {
   const { chatId } = useLocalSearchParams()
   const { user } = useAuth()
   const router = useRouter()
@@ -84,12 +86,15 @@ export default function ChatScreen() {
   const [selectedMessage, setSelectedMessage] = useState<ChatMessage | null>(null)
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const flatListRef = useRef<FlatList>(null)
-  const hasMarkedAsRead = useRef(false)
+  const initialScrollIndex = useRef<number | null>(null)
+  const didInitialScroll = useRef(false)
+  const hasResetUnreadCount = useRef(false)
   const slideAnim = useRef(new Animated.Value(300)).current
   const [isViewable, setIsViewable] = useState(true)
   const viewabilityConfig = useRef({
     itemVisiblePercentThreshold: 50,
   }).current
+  const isNearBottom = useRef(true)
 
   useEffect(() => {
     if (!chatId || !user?.uid) return
@@ -145,55 +150,82 @@ export default function ChatScreen() {
   }, [chatId, user?.uid])
 
   useEffect(() => {
-    if (messages.length > 0 && !hasMarkedAsRead.current) {
-      const unreadMessages = messages.filter(
-        (msg) => msg.senderId !== user?.uid && !msg.readBy?.includes(user?.uid || ""),
-      )
+    if (!messages.length || initialScrollIndex.current !== null) return
 
-      hasMarkedAsRead.current = true
+    const firstUnreadIndex = messages.findIndex(
+      (msg) => msg.senderId !== user?.uid && !msg.readBy?.includes(user?.uid || ""),
+    )
 
-      setTimeout(() => {
-        if (unreadMessages.length > 0) {
-          const firstUnreadIndex = messages.findIndex(
-            (msg) => msg.senderId !== user?.uid && !msg.readBy?.includes(user?.uid || "")
-          )
+    initialScrollIndex.current = firstUnreadIndex !== -1 ? firstUnreadIndex : messages.length - 1
+  }, [messages, user?.uid])
 
-          if (firstUnreadIndex !== -1) {
-            try {
-              flatListRef.current?.scrollToIndex({
-                index: firstUnreadIndex,
-                animated: true,
-                viewPosition: 0,
-              })
-            } catch (error) {
-              flatListRef.current?.scrollToEnd({ animated: true })
-            }
-          }
-        } else {
-          flatListRef.current?.scrollToEnd({ animated: true })
-        }
-      }, 300)
+  const handleLayout = () => {
+    if (didInitialScroll.current || initialScrollIndex.current === null) return
 
-      if (chatId && user?.uid) {
-        updateDoc(doc(db, "chats", chatId as string), {
-          [`unreadCount.${user.uid}`]: 0,
-        }).catch((error) => {
-          console.error("Error resetting unread count:", error)
+    didInitialScroll.current = true
+
+    InteractionManager.runAfterInteractions(() => {
+      if (flatListRef.current && initialScrollIndex.current !== null) {
+        flatListRef.current.scrollToIndex({
+          index: initialScrollIndex.current,
+          animated: false,
+          viewPosition: initialScrollIndex.current === messages.length - 1 ? 1 : 0.1,
         })
       }
-    }
-  }, [messages.length])
+    })
+  }
 
-  const markAsRead = async (messageId: string) => {
+  const handleScroll = (event: any) => {
+    const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent
+    const padding = 40
+
+    isNearBottom.current = layoutMeasurement.height + contentOffset.y >= contentSize.height - padding
+  }
+
+  useEffect(() => {
     if (!user?.uid || !chatId) return
 
+    updateDoc(doc(db, "chats", chatId as string), {
+      [`unreadCount.${user.uid}`]: 0,
+    }).catch((error) => {
+      console.error("Error resetting unread count:", error)
+    })
+  }, [messages.length, chatId, user?.uid])
+
+  const markMessagesAsRead = async (messageIds: string[]) => {
+    if (!user?.uid || !chatId || messageIds.length === 0) return
+
     try {
-      const messageRef = doc(db, "messages", messageId)
-      await updateDoc(messageRef, {
-        readBy: [...((await getDoc(messageRef)).data()?.readBy || []), user?.uid],
-      })
+      const batch = writeBatch(db)
+
+      for (const messageId of messageIds) {
+        const messageRef = doc(db, "messages", messageId)
+        const messageDoc = await getDoc(messageRef)
+        const currentReadBy = messageDoc.data()?.readBy || []
+
+        if (!currentReadBy.includes(user.uid)) {
+          batch.update(messageRef, {
+            readBy: [...currentReadBy, user.uid],
+          })
+        }
+      }
+
+      await batch.commit()
+
+      const lastMessage = messages[messages.length - 1]
+      if (lastMessage && messageIds.includes(lastMessage.id) && lastMessage.senderId !== user.uid) {
+        const chatRef = doc(db, "chats", chatId as string)
+        const chatSnap = await getDoc(chatRef)
+        const chatData = chatSnap.data()
+
+        if (chatData?.lastMessage?.senderId === lastMessage.senderId) {
+          await updateDoc(chatRef, {
+            "lastMessage.readBy": [...(chatData.lastMessage.readBy || []), user.uid],
+          })
+        }
+      }
     } catch (error) {
-      console.error("Error marking message as read:", error)
+      console.error("Error marking messages as read:", error)
     }
   }
 
@@ -208,9 +240,8 @@ export default function ChatScreen() {
       })
 
     if (visibleUnreadMessages.length > 0) {
-      visibleUnreadMessages.forEach((msg: ChatMessage) => {
-        markAsRead(msg.id)
-      })
+      const messageIds = visibleUnreadMessages.map((msg: ChatMessage) => msg.id)
+      markMessagesAsRead(messageIds)
     }
   }).current
 
@@ -424,14 +455,16 @@ export default function ChatScreen() {
       status: "sending" as const,
       createdAt: new Date(),
       readBy: [user.uid],
-      ...(replyTo && { replyTo }), // Only add replyTo if it exists
+      ...(replyTo && { replyTo }),
     }
 
     setMessages((prev) => [...prev, tempMessage])
 
-    setTimeout(() => {
-      flatListRef.current?.scrollToEnd({ animated: false })
-    }, 100)
+    if (isNearBottom.current) {
+      InteractionManager.runAfterInteractions(() => {
+        flatListRef.current?.scrollToEnd({ animated: false })
+      })
+    }
 
     setSending(true)
     try {
@@ -446,7 +479,6 @@ export default function ChatScreen() {
         readBy: [user.uid],
       }
 
-      // Only add replyTo field if there's actually a reply
       if (replyTo) {
         messageDoc.replyTo = replyTo
       }
@@ -515,25 +547,25 @@ export default function ChatScreen() {
       if (!isOwnMessage) return null
 
       const readBy = item.readBy || []
-      const isRead = readBy.length > 1 // Read by both sender and receiver
-      const isDelivered = item.status === "delivered" || readBy.includes(participant?.id || "")
+      const isRead = participant?.id && readBy.includes(participant.id)
+      const isDelivered = readBy.length > 1 // Sender + at least one other
 
       if (isRead) {
-        // Double blue ticks for read
+        // Double blue checkmarks for read
         return (
           <View style={styles.tickContainer}>
             <Text style={[styles.tick, styles.tickRead]}>✓✓</Text>
           </View>
         )
       } else if (isDelivered) {
-        // Double grey ticks for delivered
+        // Double grey checkmarks for delivered
         return (
           <View style={styles.tickContainer}>
             <Text style={styles.tick}>✓✓</Text>
           </View>
         )
-      } else if (item.status === "sent") {
-        // Single grey tick for sent
+      } else if (item.status === "sent" || item.id.startsWith("temp-")) {
+        // Single grey checkmark for sent
         return (
           <View style={styles.tickContainer}>
             <Text style={styles.tick}>✓</Text>
@@ -591,7 +623,7 @@ export default function ChatScreen() {
               {item.id.startsWith("temp-") && (
                 <ActivityIndicator
                   size="small"
-                  color={isOwnMessage ? "#fff" : "#666"}
+                  color={isOwnMessage ? "#667781" : "#666"}
                   style={styles.sendingIndicator}
                 />
               )}
@@ -727,24 +759,17 @@ export default function ChatScreen() {
           style={styles.messagesList}
           onViewableItemsChanged={onViewableItemsChanged}
           viewabilityConfig={viewabilityConfig}
-          onContentSizeChange={() => {
-            if (messages.length > 0 && hasMarkedAsRead.current) {
-              flatListRef.current?.scrollToEnd({ animated: false })
-            }
-          }}
+          onLayout={handleLayout}
+          onScroll={handleScroll}
+          scrollEventThrottle={16}
           onScrollToIndexFailed={(info) => {
             const { index, highestMeasuredFrameIndex, averageItemLength } = info
-            setTimeout(() => {
-              if (messages.length > 0 && index < messages.length) {
-                flatListRef.current?.scrollToIndex({
-                  index: Math.min(index, messages.length - 1),
-                  animated: true,
-                  viewPosition: 0,
-                })
-              } else {
-                flatListRef.current?.scrollToEnd({ animated: true })
-              }
-            }, 100)
+            const safeIndex = Math.min(index, highestMeasuredFrameIndex)
+
+            flatListRef.current?.scrollToOffset({
+              offset: safeIndex * averageItemLength,
+              animated: false,
+            })
           }}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
@@ -928,7 +953,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginTop: 2,
     gap: 3,
-    minHeight: 16, // Added minHeight to accommodate loading indicator
+    minHeight: 16,
   },
   emptyContainer: {
     flex: 1,
@@ -1051,13 +1076,13 @@ const styles = StyleSheet.create({
   replyContent: {
     flex: 1,
     justifyContent: "center",
-    minWidth: 0, // Added minWidth: 0 to enable text truncation
+    minWidth: 0,
   },
   replySender: {
     fontSize: 13,
     fontWeight: "700",
     marginBottom: 2,
-    flexShrink: 1, // Added flexShrink to prevent vertical text layout
+    flexShrink: 1,
   },
   replySenderOwn: {
     color: "#25D366",
@@ -1077,7 +1102,7 @@ const styles = StyleSheet.create({
   },
   statusContainer: {
     marginLeft: 2,
-    minWidth: 16, // Added minWidth for consistent spacing with loading indicator
+    minWidth: 16,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1169,7 +1194,7 @@ const styles = StyleSheet.create({
   },
   cancelButtonText: {
     fontSize: 16,
-    color: "#6696A0",
+    color: "#667781",
     fontWeight: "600",
   },
   inputContainer: {
@@ -1196,21 +1221,22 @@ const styles = StyleSheet.create({
     maxHeight: 100,
   },
   messageTimeOwn: {
-    fontSize: 13,
-    color: "#fff",
+    fontSize: 11,
+    color: "#667781",
   },
   messageTime: {
-    fontSize: 13,
+    fontSize: 11,
     color: "#667781",
   },
   tickContainer: {
-    marginLeft: 4,
+    marginLeft: 2,
   },
   tick: {
     fontSize: 14,
     color: "#999",
+    fontWeight: "bold",
   },
   tickRead: {
-    color: "#4FC3F7",
+    color: "#53BDEB",
   },
 })
