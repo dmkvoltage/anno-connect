@@ -101,10 +101,6 @@ export default function ChatDetail() {
     // Handle layout changes here
   }
 
-const lastReadWriteTs = useRef(0)
-const didComputeInitialIndex = useRef(false)
-
-
   const handleScroll = (event: any) => {
     const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent
     const paddingToBottom = 50
@@ -112,30 +108,20 @@ const didComputeInitialIndex = useRef(false)
   }
 
   const onViewableItemsChanged = useRef(({ viewableItems }: any) => {
-    if (!user?.uid || !chatId || !lastReadAt) return
+    if (!user?.uid || !chatId || !lastReadAt || viewableItems.length === 0) return
 
-    const now = Date.now()
-    if (now - lastReadWriteTs.current < 1500) return
-
-    const hasUnreadVisible = viewableItems.some((v: any) => {
-      const msg = v.item
-      const messageDate =
-        (msg.createdAt as any)?.toDate?.() ?? new Date(msg.createdAt)
-
-      return (
-        msg.senderId !== user.uid &&
-        (!lastReadAt || messageDate > lastReadAt)
-      )
+    // Check if any unread messages became visible
+    const hasUnreadVisible = viewableItems.some((item: any) => {
+      const msg = item.item
+      const messageDate = (msg.createdAt as any)?.toDate?.() ?? new Date(msg.createdAt)
+      return msg.senderId !== user.uid && messageDate > lastReadAt
     })
 
+    // Update lastReadAt timestamp when unread messages are viewed
     if (hasUnreadVisible) {
-      lastReadWriteTs.current = now
-
       updateLastReadAt(chatId as string, user.uid)
-      setLastReadAt(new Date())
     }
   }).current
-
 
   useEffect(() => {
     if (!chatId || !user?.uid) return
@@ -211,65 +197,45 @@ const didComputeInitialIndex = useRef(false)
   }, [chatId, user?.uid])
 
   useEffect(() => {
-    if (
-      !messages.length ||
-      didComputeInitialIndex.current ||
-      lastReadAt === undefined
-    )
-      return
-
-    didComputeInitialIndex.current = true
+    if (!messages.length || initialScrollIndex.current !== null || lastReadAt === undefined) return
 
     const firstUnreadIndex = messages.findIndex((msg) => {
-      const messageDate =
-        (msg.createdAt as any)?.toDate?.() ?? new Date(msg.createdAt)
-
-      return (
-        msg.senderId !== user?.uid &&
-        (!lastReadAt || messageDate > lastReadAt)
-      )
+      const messageDate = (msg.createdAt as any)?.toDate?.() ?? new Date(msg.createdAt)
+      return msg.senderId !== user?.uid && (!lastReadAt || messageDate > lastReadAt)
     })
 
-    initialScrollIndex.current =
-      firstUnreadIndex !== -1 ? firstUnreadIndex : messages.length - 1
+    initialScrollIndex.current = firstUnreadIndex !== -1 ? firstUnreadIndex : messages.length - 1
   }, [messages, lastReadAt, user?.uid])
 
-
   useEffect(() => {
-    if (
-      !chatId ||
-      !user?.uid ||
-      hasResetUnreadCount.current ||
-      !messages.length
-    )
-      return
+    if (!user?.uid || !chatId || hasResetUnreadCount.current) return
 
     hasResetUnreadCount.current = true
 
     updateDoc(doc(db, "chats", chatId as string), {
       [`unreadCount.${user.uid}`]: 0,
-    }).catch(() => {})
-  }, [chatId, user?.uid, messages.length])
-
+    }).catch((error) => {
+      console.error("Error resetting unread count:", error)
+    })
+  }, [chatId, user?.uid])
 
   useEffect(() => {
     if (
-      didInitialScroll.current ||
-      initialScrollIndex.current === null ||
-      !flatListRef.current
-    )
-      return
+      initialScrollIndex.current !== null &&
+      !didInitialScroll.current &&
+      flatListRef.current &&
+      messages.length > 0
+    ) {
+      didInitialScroll.current = true
 
-    didInitialScroll.current = true
-
-    InteractionManager.runAfterInteractions(() => {
-      flatListRef.current?.scrollToIndex({
-        index: initialScrollIndex.current!,
-        animated: false,
+      InteractionManager.runAfterInteractions(() => {
+        flatListRef.current?.scrollToIndex({
+          index: initialScrollIndex.current!,
+          animated: false,
+        })
       })
-    })
+    }
   }, [messages])
-
 
   useEffect(() => {
     if (!participant?.id) return
@@ -486,12 +452,11 @@ const didComputeInitialIndex = useRef(false)
 
     setMessages((prev) => [...prev, tempMessage])
 
-  if (isNearBottom.current) {
-    InteractionManager.runAfterInteractions(() => {
-      flatListRef.current?.scrollToEnd({ animated: false })
-    })
-  }
-
+    if (isNearBottom.current) {
+      InteractionManager.runAfterInteractions(() => {
+        flatListRef.current?.scrollToEnd({ animated: false })
+      })
+    }
 
     setSending(true)
     try {
