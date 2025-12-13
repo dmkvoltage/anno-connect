@@ -13,6 +13,7 @@ export interface Message {
   createdAt: Date;
   voiceUrl?: string;
   voiceDuration?: number;
+  replyTo?: string; // ID of the message being replied to
 }
 
 export interface Chat {
