@@ -5,9 +5,10 @@ import DiscoverScreen from "@/components/DiscoverScreen";
 import React from "react";
 
 export default function TabOneScreen() {
-  const { user, isLoading } = useAuth();
+  const { user, userProfile, isLoading } = useAuth();
 
-  if (isLoading) {
+  // Show loading only if no cached profile and authenticating
+  if (isLoading && !userProfile) {
     return (
       <View style={styles.container}>
         <ActivityIndicator size="large" color="#007AFF" />
@@ -16,7 +17,7 @@ export default function TabOneScreen() {
     );
   }
 
-  if (!user) {
+  if (!user && !userProfile) {
     return <AuthScreen />;
   }
 

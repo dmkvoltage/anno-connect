@@ -13,6 +13,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Star, Shield, Users, Send } from "lucide-react-native";
 import { collection, query, orderBy, limit, getDocs, where, addDoc, onSnapshot } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import { UserCache, ConnectionCache, OfflineManager } from "@/lib/storage";
 import type { Gender } from "@/types/user";
 
 type SortOption = "random" | "rating" | "verified" | "active" | "connections";
@@ -26,6 +27,7 @@ interface DiscoverUser {
   verified: boolean;
   connectionCount: number;
   status: "online" | "offline";
+  lastSeen?: string;
 }
 
 export default function DiscoverScreen() {
@@ -38,44 +40,179 @@ export default function DiscoverScreen() {
   const [error, setError] = useState<Error | null>(null);
   const [pendingRequests, setPendingRequests] = useState<Set<string>>(new Set());
 
-  const fetchUsers = async () => {
+  const fetchUsers = async (showLoading = true) => {
     try {
-      setIsLoading(true);
+      if (showLoading) {
+        setIsLoading(true);
+      }
       setIsError(false);
       setError(null);
 
-      let q: any = collection(db, 'users');
+      // Load from cache first (offline-first)
+      const cachedUsers = UserCache.getAllUsers();
+      if (cachedUsers.length > 0 && !showLoading) {
+        // Show cached users immediately for better UX
+        let filteredCachedUsers = cachedUsers.filter(u =>
+          u.id !== user?.uid &&
+          !ConnectionCache.getUserConnections(user?.uid || '').some(conn => conn.connectedUserId === u.id)
+        );
 
-      if (sortBy === 'rating') {
-        q = query(q, orderBy('rating', 'desc'), limit(20));
-      } else if (sortBy === 'verified') {
-        q = query(q, where('verified', '==', true), limit(20));
-      } else if (sortBy === 'connections') {
-        q = query(q, orderBy('connectionCount', 'desc'), limit(20));
-      } else if (sortBy === 'active') {
-        q = query(q, orderBy('lastSeen', 'desc'), limit(20));
-      } else {
-        // random: get more and shuffle
-        q = query(q, limit(50));
+        // Convert CachedUser to DiscoverUser format
+        const discoverUsers: DiscoverUser[] = filteredCachedUsers.map(u => ({
+          id: u.id,
+          username: u.username,
+          gender: u.gender,
+          avatar: u.avatar,
+          rating: u.rating,
+          verified: u.verified,
+          connectionCount: u.connectionCount || 0,
+          status: u.status,
+          lastSeen: u.lastSeen,
+        }));
+
+        // Apply sorting to cached users
+        let result: DiscoverUser[];
+        if (sortBy === 'rating') {
+          result = discoverUsers.sort((a, b) => b.rating - a.rating).slice(0, 20);
+        } else if (sortBy === 'verified') {
+          result = discoverUsers.filter(u => u.verified).slice(0, 20);
+        } else if (sortBy === 'active') {
+          result = discoverUsers
+            .sort((a, b) => (b.lastSeen ? new Date(b.lastSeen).getTime() : 0) - (a.lastSeen ? new Date(a.lastSeen).getTime() : 0))
+            .slice(0, 20);
+        } else { // random
+          const shuffled = [...discoverUsers];
+          for (let i = shuffled.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+          }
+          result = shuffled.slice(0, 20);
+        }
+
+        setUsers(result);
+        if (!showLoading) return; // Don't fetch from server if we just showed cached data
       }
 
-      const snapshot = await getDocs(q);
-      let fetchedUsers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any })) as DiscoverUser[];
+      // Try to fetch from server
+      try {
+        let q: any = collection(db, 'users');
 
-      // Filter out excluded ids
-      fetchedUsers = fetchedUsers.filter(u => u.id !== user?.uid);
+        if (sortBy === 'rating') {
+          q = query(q, orderBy('rating', 'desc'), limit(20));
+        } else if (sortBy === 'verified') {
+          q = query(q, where('verified', '==', true), limit(20));
+        } else if (sortBy === 'connections') {
+          q = query(q, orderBy('connectionCount', 'desc'), limit(20));
+        } else if (sortBy === 'active') {
+          q = query(q, orderBy('lastSeen', 'desc'), limit(20));
+        } else {
+          // random: get more and shuffle
+          q = query(q, limit(50));
+        }
 
-      // For random, shuffle and take 20
-      if (sortBy === 'random') {
-        fetchedUsers = fetchedUsers.sort(() => 0.5 - Math.random()).slice(0, 20);
+        const snapshot = await getDocs(q);
+        let fetchedUsers = snapshot.docs.map(doc => {
+          const data = doc.data() as any; // Firebase returns unknown, we'll handle safely
+          return {
+            id: doc.id,
+            username: data.username || 'Unknown',
+            gender: data.gender || 'other',
+            avatar: data.avatar || '👤',
+            rating: data.rating || 0,
+            verified: data.verified || false,
+            connectionCount: data.connectionCount || 0,
+            status: data.status || 'offline',
+            lastSeen: data.lastSeen?.toDate?.()?.toISOString() || data.lastSeen || undefined
+          } as DiscoverUser;
+        });
+
+        // Cache users for offline use
+        fetchedUsers.forEach(user => {
+          UserCache.setUser({
+            id: user.id,
+            username: user.username,
+            gender: user.gender,
+            avatar: user.avatar,
+            rating: user.rating,
+            verified: user.verified,
+            status: user.status,
+            lastSeen: typeof user.lastSeen === 'string' ? user.lastSeen : undefined,
+            connectionCount: user.connectionCount,
+            synced: true
+          });
+        });
+
+        // Filter out excluded ids (current user and existing connections)
+        fetchedUsers = fetchedUsers.filter(u => u.id !== user?.uid);
+
+        // Remove users that are already connected
+        const userConnections = ConnectionCache.getUserConnections(user?.uid || '');
+        fetchedUsers = fetchedUsers.filter(u =>
+          !userConnections.some(conn => conn.connectedUserId === u.id)
+        );
+
+        // For random, shuffle and take 20
+        if (sortBy === 'random') {
+          fetchedUsers = fetchedUsers.sort(() => 0.5 - Math.random()).slice(0, 20);
+        }
+
+        setUsers(fetchedUsers);
+      } catch (serverError) {
+        console.warn('Server fetch failed, using cached data:', serverError);
+        // If server fails, we've already shown cached data above
       }
-
-      setUsers(fetchedUsers);
     } catch (err) {
       setIsError(true);
       setError(err as Error);
+
+      // On error, try to show cached users if available
+      const cachedUsers = UserCache.getAllUsers();
+      if (cachedUsers.length > 0) {
+        let filteredCachedUsers = cachedUsers.filter(u =>
+          u.id !== user?.uid &&
+          !ConnectionCache.getUserConnections(user?.uid || '').some(conn => conn.connectedUserId === u.id)
+        );
+
+        let result: DiscoverUser[];
+        // Convert CachedUser to DiscoverUser format and apply sorting
+        const discoverUsers: DiscoverUser[] = filteredCachedUsers.map(u => ({
+          id: u.id,
+          username: u.username,
+          gender: u.gender,
+          avatar: u.avatar,
+          rating: u.rating,
+          verified: u.verified,
+          connectionCount: u.connectionCount || 0,
+          status: u.status,
+          lastSeen: u.lastSeen,
+        }));
+
+        if (sortBy === 'rating') {
+          result = discoverUsers.sort((a, b) => b.rating - a.rating).slice(0, 20);
+        } else if (sortBy === 'verified') {
+          result = discoverUsers.filter(u => u.verified).slice(0, 20);
+        } else if (sortBy === 'active') {
+          result = discoverUsers
+            .sort((a, b) => (b.lastSeen ? new Date(b.lastSeen).getTime() : 0) - (a.lastSeen ? new Date(a.lastSeen).getTime() : 0))
+            .slice(0, 20);
+        } else if (sortBy === 'connections') {
+          result = discoverUsers.sort((a, b) => b.connectionCount - a.connectionCount).slice(0, 20);
+        } else { // random
+          const shuffled = [...discoverUsers];
+          for (let i = shuffled.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+          }
+          result = shuffled.slice(0, 20);
+        }
+
+        setUsers(result);
+        setIsError(false); // Don't show error if we have cached data
+      }
     } finally {
-      setIsLoading(false);
+      if (showLoading) {
+        setIsLoading(false);
+      }
     }
   };
 

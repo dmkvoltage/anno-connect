@@ -5,9 +5,9 @@ import AuthScreen from "@/components/AuthScreen";
 import ChatsScreen from "@/components/ChatsScreen";
 
 export default function ChatsTab() {
-  const { user, isLoading } = useAuth();
+  const { user, userProfile, isLoading } = useAuth();
 
-  if (isLoading) {
+  if (isLoading && !userProfile) {
     return (
       <View style={styles.container}>
         <ActivityIndicator size="large" color="#007AFF" />
@@ -15,7 +15,7 @@ export default function ChatsTab() {
     );
   }
 
-  if (!user) {
+  if (!user && !userProfile) {
     return <AuthScreen />;
   }
 

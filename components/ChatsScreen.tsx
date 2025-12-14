@@ -7,10 +7,16 @@ import { useAuth } from "@/contexts/AuthContext"
 import { collection, query, where, onSnapshot, doc, getDoc } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { Check, CheckCheck, Star } from "lucide-react-native"
+import { UserCache, ChatCache, MessageCache, ConnectionCache, OfflineManager } from "@/lib/storage"
 import type { Connection } from "@/types/connection"
 import React from "react"
 
-interface ChatItem extends Connection {
+interface ChatItem {
+  id: string
+  userId: string
+  connectedUserId: string
+  chatId: string
+  createdAt: Date
   connectedUserUsername: string
   connectedUserAvatar: string
   verified: boolean
@@ -26,173 +32,312 @@ export default function ChatsScreen() {
   const { user } = useAuth()
   const router = useRouter()
   const [chats, setChats] = useState<ChatItem[]>([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false) // Remove loading state since we show cached data instantly
 
   useEffect(() => {
     if (!user?.uid) return
 
-    setLoading(true)
+    // Load from cache immediately for instant display
+    const loadFromCache = () => {
+      const cachedConnections = ConnectionCache.getUserConnections(user.uid);
+      const cachedChats = cachedConnections.map(conn => {
+        const chatData = ChatCache.getChat(conn.chatId);
+        const connectedUser = UserCache.getUser(conn.connectedUserId);
 
-    // Listen to connections with chats
-    const connectionsQuery = query(collection(db, "connections"), where("userId", "==", user.uid))
+        // Get last message from cache
+        const messages = MessageCache.getMessages(conn.chatId);
+        const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
 
-    const unsubscribe = onSnapshot(connectionsQuery, async (snapshot) => {
-      const connections = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })) as Connection[]
+        let lastMessageText = "No messages yet";
+        let lastMessageStatus: "sent" | "delivered" | "read" = "sent";
 
-      // Set up real-time listeners for each chat
-      const chatUnsubscribes: (() => void)[] = []
-      const chatPromises = connections.map(async (conn) => {
-        return new Promise<ChatItem>((resolve) => {
-          // Get connected user details
-          const connectedUserDoc = getDoc(doc(db, "users", conn.connectedUserId))
-          const chatDoc = getDoc(doc(db, "chats", conn.chatId))
+        if (lastMessage) {
+          const isOwnMessage = lastMessage.senderId === user.uid;
 
-          Promise.all([connectedUserDoc, chatDoc]).then(([connectedUserSnap, chatSnap]) => {
-            const connectedUserData = connectedUserSnap.data()
-            const chatData = chatSnap.data()
-
-            const lastMessageData = chatData?.lastMessage
-            let lastMessageText = "No messages yet"
-            let lastMessageStatus: "sent" | "delivered" | "read" = "sent"
-
-            if (lastMessageData) {
-              const isOwnMessage = lastMessageData.senderId === user.uid
-
-              if (isOwnMessage) {
-                const readBy = lastMessageData.readBy || []
-                // Check if the other user has read the message
-                if (readBy.includes(conn.connectedUserId)) {
-                  lastMessageStatus = "read"
-                } else if (readBy.length > 1) {
-                  // Message delivered to server and possibly other devices
-                  lastMessageStatus = "delivered"
-                } else {
-                  lastMessageStatus = "sent"
-                }
-              }
-
-              // Show typing indicator if user is typing
-              const typingUsers = Object.keys(chatData?.typing || {}).filter(
-                (uid) => chatData.typing[uid] && uid !== user.uid,
-              )
-
-              if (typingUsers.length > 0) {
-                lastMessageText = "typing..."
-              } else {
-                // Show message preview with sender prefix
-                const senderPrefix = isOwnMessage ? "You: " : ""
-                lastMessageText = senderPrefix + lastMessageData.content
-                if (lastMessageText.length > 40) {
-                  lastMessageText = lastMessageText.substring(0, 40) + "..."
-                }
-              }
+          if (isOwnMessage) {
+            const readBy = lastMessage.readBy || [];
+            if (readBy.includes(conn.connectedUserId)) {
+              lastMessageStatus = "read";
+            } else if (readBy.length > 1) {
+              lastMessageStatus = "delivered";
+            } else {
+              lastMessageStatus = "sent";
             }
+          }
 
-            const chatItem: ChatItem = {
-              ...conn,
-              connectedUserUsername: connectedUserData?.username || "Unknown",
-              connectedUserAvatar: connectedUserData?.avatar || "👤",
-              verified: connectedUserData?.verified || false,
-              lastMessage: lastMessageText,
-              lastMessageTime: lastMessageData?.createdAt?.toDate() || conn.createdAt,
-              unreadCount: chatData?.unreadCount?.[user.uid] || 0,
-              isTyping: false,
-              lastMessageSenderId: lastMessageData?.senderId,
-              lastMessageStatus,
+          // Show message preview with sender prefix
+          const senderPrefix = isOwnMessage ? "You: " : "";
+          lastMessageText = senderPrefix + lastMessage.content;
+          if (lastMessageText.length > 40) {
+            lastMessageText = lastMessageText.substring(0, 40) + "...";
+          }
+        }
+
+        const chatItem: ChatItem = {
+          id: conn.id,
+          userId: conn.userId,
+          connectedUserId: conn.connectedUserId,
+          chatId: conn.chatId,
+          createdAt: new Date(conn.createdAt),
+          connectedUserUsername: connectedUser?.username || "Unknown",
+          connectedUserAvatar: connectedUser?.avatar || "👤",
+          verified: connectedUser?.verified || false,
+          lastMessage: lastMessageText,
+          lastMessageTime: lastMessage ? new Date(lastMessage.createdAt) : new Date(conn.createdAt),
+          unreadCount: chatData?.unreadCount?.[user.uid] || 0,
+          isTyping: false,
+          lastMessageSenderId: lastMessage?.senderId,
+          lastMessageStatus,
+        };
+
+        return chatItem;
+      });
+
+      // Sort by last message time
+      cachedChats.sort((a, b) => {
+        const aTime = a.lastMessageTime instanceof Date ? a.lastMessageTime.getTime() : new Date(a.lastMessageTime || 0).getTime();
+        const bTime = b.lastMessageTime instanceof Date ? b.lastMessageTime.getTime() : new Date(b.lastMessageTime || 0).getTime();
+        return bTime - aTime;
+      });
+
+      setChats(cachedChats);
+      setLoading(false);
+    };
+
+    loadFromCache();
+
+    // Sync with server in background
+    const syncWithServer = async () => {
+      try {
+        // Listen to connections with chats
+        const connectionsQuery = query(collection(db, "connections"), where("userId", "==", user.uid));
+
+        const unsubscribe = onSnapshot(connectionsQuery, async (snapshot) => {
+          const connections = snapshot.docs.map((doc) => {
+            const data = doc.data();
+            return {
+              id: doc.id,
+              userId: data.userId,
+              connectedUserId: data.connectedUserId,
+              chatId: data.chatId,
+              createdAt: data.createdAt?.toDate?.() || new Date(),
+              lastInteraction: data.lastInteraction?.toDate?.() || new Date(),
             }
+          });
 
-            // Set up real-time listener for this chat
-            const chatUnsubscribe = onSnapshot(doc(db, "chats", conn.chatId), (chatSnapshot) => {
-              const updatedChatData = chatSnapshot.data()
-              const lastMessageData = updatedChatData?.lastMessage
+          // Cache connections
+          connections.forEach(conn => {
+            ConnectionCache.addConnection({
+              id: conn.id,
+              userId: conn.userId,
+              connectedUserId: conn.connectedUserId,
+              chatId: conn.chatId,
+              createdAt: conn.createdAt.toISOString(),
+              synced: true
+            });
+          });
 
-              let updatedLastMessage = "No messages yet"
-              let updatedStatus: "sent" | "delivered" | "read" = "sent"
-              let isTyping = false
+          // Set up real-time listeners for each chat
+          const chatUnsubscribes: (() => void)[] = [];
+          const chatPromises = connections.map(async (conn) => {
+            return new Promise<ChatItem>((resolve) => {
+              // Get connected user details
+              const connectedUserDoc = getDoc(doc(db, "users", conn.connectedUserId));
+              const chatDoc = getDoc(doc(db, "chats", conn.chatId));
 
-              if (lastMessageData) {
-                const isOwnMessage = lastMessageData.senderId === user.uid
+              Promise.all([connectedUserDoc, chatDoc]).then(([connectedUserSnap, chatSnap]) => {
+                const connectedUserData = connectedUserSnap.data() as any;
+                const chatData = chatSnap.data() as any;
 
-                if (isOwnMessage) {
-                  const readBy = lastMessageData.readBy || []
-                  if (readBy.includes(conn.connectedUserId)) {
-                    updatedStatus = "read"
-                  } else if (readBy.length > 1) {
-                    updatedStatus = "delivered"
+                // Cache user data
+                if (connectedUserData) {
+                  UserCache.setUser({
+                    id: conn.connectedUserId,
+                    username: connectedUserData.username || "Unknown",
+                    gender: connectedUserData.gender || "other",
+                    avatar: connectedUserData.avatar || "👤",
+                    rating: connectedUserData.rating || 0,
+                    verified: connectedUserData.verified || false,
+                    status: connectedUserData.status || "offline",
+                    lastSeen: connectedUserData.lastSeen?.toDate?.()?.toISOString() || connectedUserData.lastSeen || new Date().toISOString(),
+                    connectionCount: connectedUserData.connectionCount || 0,
+                    synced: true
+                  });
+                }
+
+                // Cache chat data
+                if (chatData) {
+                  ChatCache.setChat({
+                    id: conn.chatId,
+                    participants: chatData.participants || [user.uid, conn.connectedUserId],
+                    lastMessage: chatData.lastMessage ? {
+                      content: chatData.lastMessage.content,
+                      senderId: chatData.lastMessage.senderId,
+                      createdAt: chatData.lastMessage.createdAt?.toDate?.()?.toISOString() || chatData.lastMessage.createdAt,
+                      readBy: chatData.lastMessage.readBy || []
+                    } : undefined,
+                    lastActivity: chatData.lastActivity?.toDate?.()?.toISOString() || new Date().toISOString(),
+                    unreadCount: chatData.unreadCount || {},
+                    synced: true
+                  });
+                }
+
+                const lastMessageData = chatData?.lastMessage;
+                let lastMessageText = "No messages yet";
+                let lastMessageStatus: "sent" | "delivered" | "read" = "sent";
+
+                if (lastMessageData) {
+                  const isOwnMessage = lastMessageData.senderId === user.uid;
+
+                  if (isOwnMessage) {
+                    const readBy = lastMessageData.readBy || [];
+                    if (readBy.includes(conn.connectedUserId)) {
+                      lastMessageStatus = "read";
+                    } else if (readBy.length > 1) {
+                      lastMessageStatus = "delivered";
+                    } else {
+                      lastMessageStatus = "sent";
+                    }
+                  }
+
+                  // Show typing indicator if user is typing
+                  const typingUsers = Object.keys(chatData?.typing || {}).filter(
+                    (uid) => chatData.typing[uid] && uid !== user.uid,
+                  );
+
+                  if (typingUsers.length > 0) {
+                    lastMessageText = "typing...";
                   } else {
-                    updatedStatus = "sent"
+                    // Show message preview with sender prefix
+                    const senderPrefix = isOwnMessage ? "You: " : "";
+                    lastMessageText = senderPrefix + lastMessageData.content;
+                    if (lastMessageText.length > 40) {
+                      lastMessageText = lastMessageText.substring(0, 40) + "...";
+                    }
                   }
                 }
 
-                // Show typing indicator if user is typing
-                const typingUsers = Object.keys(updatedChatData?.typing || {}).filter(
-                  (uid) => updatedChatData.typing[uid] && uid !== user.uid,
-                )
+                const chatItem: ChatItem = {
+                  ...conn,
+                  connectedUserUsername: connectedUserData?.username || "Unknown",
+                  connectedUserAvatar: connectedUserData?.avatar || "👤",
+                  verified: connectedUserData?.verified || false,
+                  lastMessage: lastMessageText,
+                  lastMessageTime: lastMessageData?.createdAt?.toDate() || conn.createdAt,
+                  unreadCount: chatData?.unreadCount?.[user.uid] || 0,
+                  isTyping: false,
+                  lastMessageSenderId: lastMessageData?.senderId,
+                  lastMessageStatus,
+                };
 
-                if (typingUsers.length > 0) {
-                  updatedLastMessage = "typing..."
-                  isTyping = true
-                } else {
-                  // Show message preview with sender prefix
-                  const senderPrefix = isOwnMessage ? "You: " : ""
-                  updatedLastMessage = senderPrefix + lastMessageData.content
-                  if (updatedLastMessage.length > 40) {
-                    updatedLastMessage = updatedLastMessage.substring(0, 40) + "..."
+                // Set up real-time listener for this chat
+                const chatUnsubscribe = onSnapshot(doc(db, "chats", conn.chatId), (chatSnapshot) => {
+                  const updatedChatData = chatSnapshot.data() as any;
+                  const lastMessageData = updatedChatData?.lastMessage;
+
+                  let updatedLastMessage = "No messages yet";
+                  let updatedStatus: "sent" | "delivered" | "read" = "sent";
+                  let isTyping = false;
+
+                  if (lastMessageData) {
+                    const isOwnMessage = lastMessageData.senderId === user.uid;
+
+                    if (isOwnMessage) {
+                      const readBy = lastMessageData.readBy || [];
+                      if (readBy.includes(conn.connectedUserId)) {
+                        updatedStatus = "read";
+                      } else if (readBy.length > 1) {
+                        updatedStatus = "delivered";
+                      } else {
+                        updatedStatus = "sent";
+                      }
+                    }
+
+                    // Show typing indicator if user is typing
+                    const typingUsers = Object.keys(updatedChatData?.typing || {}).filter(
+                      (uid) => updatedChatData.typing[uid] && uid !== user.uid,
+                    );
+
+                    if (typingUsers.length > 0) {
+                      updatedLastMessage = "typing...";
+                      isTyping = true;
+                    } else {
+                      // Show message preview with sender prefix
+                      const senderPrefix = isOwnMessage ? "You: " : "";
+                      updatedLastMessage = senderPrefix + lastMessageData.content;
+                      if (updatedLastMessage.length > 40) {
+                        updatedLastMessage = updatedLastMessage.substring(0, 40) + "...";
+                      }
+                    }
                   }
-                }
-              }
 
-              setChats((prevChats) => {
-                return prevChats
-                  .map((chat) =>
-                    chat.chatId === conn.chatId
-                      ? {
-                          ...chat,
-                          lastMessage: updatedLastMessage,
-                          lastMessageTime: lastMessageData?.createdAt?.toDate() || chat.createdAt || new Date(0),
-                          unreadCount: updatedChatData?.unreadCount?.[user.uid] || 0,
-                          isTyping,
-                          lastMessageSenderId: lastMessageData?.senderId,
-                          lastMessageStatus: updatedStatus,
-                        }
-                      : chat,
-                  )
-                  .sort((a, b) => {
-                    const aTime =
-                      a.lastMessageTime instanceof Date ? a.lastMessageTime : new Date(a.lastMessageTime || 0)
-                    const bTime =
-                      b.lastMessageTime instanceof Date ? b.lastMessageTime : new Date(b.lastMessageTime || 0)
-                    return bTime.getTime() - aTime.getTime()
-                  })
-              })
-            })
+                  setChats((prevChats) => {
+                    const updated = prevChats.map((chat) =>
+                      chat.chatId === conn.chatId
+                        ? {
+                            ...chat,
+                            lastMessage: updatedLastMessage,
+                            lastMessageTime: lastMessageData?.createdAt?.toDate() || chat.createdAt || new Date(0),
+                            unreadCount: updatedChatData?.unreadCount?.[user.uid] || 0,
+                            isTyping,
+                            lastMessageSenderId: lastMessageData?.senderId,
+                            lastMessageStatus: updatedStatus,
+                          }
+                        : chat,
+                    ).sort((a, b) => {
+                      const aTime = a.lastMessageTime instanceof Date ? a.lastMessageTime : new Date(a.lastMessageTime || 0);
+                      const bTime = b.lastMessageTime instanceof Date ? b.lastMessageTime : new Date(b.lastMessageTime || 0);
+                      return bTime.getTime() - aTime.getTime();
+                    });
 
-            chatUnsubscribes.push(chatUnsubscribe)
-            resolve(chatItem)
-          })
-        })
-      })
+                    // Update cache
+                    ChatCache.updateChat(conn.chatId, {
+                      lastMessage: lastMessageData ? {
+                        content: lastMessageData.content,
+                        senderId: lastMessageData.senderId,
+                        createdAt: lastMessageData.createdAt?.toDate?.()?.toISOString() || lastMessageData.createdAt,
+                        readBy: lastMessageData.readBy || []
+                      } : undefined,
+                      unreadCount: updatedChatData?.unreadCount || {}
+                    });
 
-      Promise.all(chatPromises).then((chatsWithDetails) => {
-        // Sort by last message time
-        chatsWithDetails.sort((a, b) => {
-          const aTime = a.lastMessageTime instanceof Date ? a.lastMessageTime : new Date(a.lastMessageTime || 0)
-          const bTime = b.lastMessageTime instanceof Date ? b.lastMessageTime : new Date(b.lastMessageTime || 0)
-          return bTime.getTime() - aTime.getTime()
-        })
+                    return updated;
+                  });
+                });
 
-        setChats(chatsWithDetails)
-        setLoading(false)
-      })
+                chatUnsubscribes.push(chatUnsubscribe);
+                resolve(chatItem);
+              });
+            });
+          });
 
-      return () => {
-        unsubscribe()
-        chatUnsubscribes.forEach((unsub) => unsub())
+          Promise.all(chatPromises).then((chatsWithDetails) => {
+            // Sort by last message time
+            chatsWithDetails.sort((a, b) => {
+              const aTime = a.lastMessageTime instanceof Date ? a.lastMessageTime.getTime() : new Date(a.lastMessageTime || 0).getTime();
+              const bTime = b.lastMessageTime instanceof Date ? b.lastMessageTime.getTime() : new Date(b.lastMessageTime || 0).getTime();
+              return bTime - aTime;
+            });
+
+            setChats(chatsWithDetails);
+          });
+
+          return () => {
+            unsubscribe();
+            chatUnsubscribes.forEach((unsub) => unsub());
+          };
+        });
+
+        return () => unsubscribe();
+      } catch (error) {
+        console.log('Background sync error, but cached data already displayed:', error);
       }
-    })
+    };
 
-    return () => unsubscribe()
-  }, [user?.uid])
+    // Start background sync
+    syncWithServer();
+
+  }, [user?.uid]);
 
   const renderStatusIcon = (item: ChatItem) => {
     // Only show status for own messages

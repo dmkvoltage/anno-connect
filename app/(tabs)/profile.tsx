@@ -5,9 +5,9 @@ import ProfileScreen from "@/components/ProfileScreen";
 import React from "react";
 
 export default function ProfileTab() {
-  const { user, isLoading } = useAuth();
+  const { user, userProfile, isLoading } = useAuth();
 
-  if (isLoading) {
+  if (isLoading && !userProfile) {
     return (
       <View style={styles.container}>
         <ActivityIndicator size="large" color="#007AFF" />
@@ -15,7 +15,7 @@ export default function ProfileTab() {
     );
   }
 
-  if (!user) {
+  if (!user && !userProfile) {
     return <AuthScreen />;
   }
 
