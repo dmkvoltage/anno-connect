@@ -10,7 +10,7 @@ export default function ProfileTab() {
   if (isLoading && !userProfile) {
     return (
       <View style={styles.container}>
-        <ActivityIndicator size="large" color="#007AFF" />
+        <ActivityIndicator size="large" color="#013a96da" />
       </View>
     );
   }

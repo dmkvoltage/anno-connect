@@ -11,7 +11,16 @@ import {
 } from "react-native";
 import { useAuth } from "@/contexts/AuthContext";
 import { Star, Shield, Users, Send } from "lucide-react-native";
-import { collection, query, orderBy, limit, getDocs, where, addDoc, onSnapshot } from "firebase/firestore";
+import {
+  collection,
+  query,
+  orderBy,
+  limit,
+  getDocs,
+  where,
+  addDoc,
+  onSnapshot,
+} from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { UserCache, ConnectionCache, OfflineManager } from "@/lib/storage";
 import type { Gender } from "@/types/user";
@@ -38,7 +47,9 @@ export default function DiscoverScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isError, setIsError] = useState(false);
   const [error, setError] = useState<Error | null>(null);
-  const [pendingRequests, setPendingRequests] = useState<Set<string>>(new Set());
+  const [pendingRequests, setPendingRequests] = useState<Set<string>>(
+    new Set()
+  );
 
   const fetchUsers = async (background = false) => {
     try {
@@ -48,13 +59,16 @@ export default function DiscoverScreen() {
       // Always show cached users if available for instant UX
       const cachedUsers = UserCache.getAllUsers();
       if (cachedUsers.length > 0) {
-        let filteredCachedUsers = cachedUsers.filter(u =>
-          u.id !== user?.uid &&
-          !ConnectionCache.getUserConnections(user?.uid || '').some(conn => conn.connectedUserId === u.id)
+        let filteredCachedUsers = cachedUsers.filter(
+          (u) =>
+            u.id !== user?.uid &&
+            !ConnectionCache.getUserConnections(user?.uid || "").some(
+              (conn) => conn.connectedUserId === u.id
+            )
         );
 
         // Convert CachedUser to DiscoverUser format
-        const discoverUsers: DiscoverUser[] = filteredCachedUsers.map(u => ({
+        const discoverUsers: DiscoverUser[] = filteredCachedUsers.map((u) => ({
           id: u.id,
           username: u.username,
           gender: u.gender,
@@ -68,17 +82,26 @@ export default function DiscoverScreen() {
 
         // Apply sorting to cached users
         let result: DiscoverUser[];
-        if (sortBy === 'rating') {
-          result = discoverUsers.sort((a, b) => b.rating - a.rating).slice(0, 20);
-        } else if (sortBy === 'verified') {
-          result = discoverUsers.filter(u => u.verified).slice(0, 20);
-        } else if (sortBy === 'active') {
+        if (sortBy === "rating") {
           result = discoverUsers
-            .sort((a, b) => (b.lastSeen ? new Date(b.lastSeen).getTime() : 0) - (a.lastSeen ? new Date(a.lastSeen).getTime() : 0))
+            .sort((a, b) => b.rating - a.rating)
             .slice(0, 20);
-        } else if (sortBy === 'connections') {
-          result = discoverUsers.sort((a, b) => b.connectionCount - a.connectionCount).slice(0, 20);
-        } else { // random
+        } else if (sortBy === "verified") {
+          result = discoverUsers.filter((u) => u.verified).slice(0, 20);
+        } else if (sortBy === "active") {
+          result = discoverUsers
+            .sort(
+              (a, b) =>
+                (b.lastSeen ? new Date(b.lastSeen).getTime() : 0) -
+                (a.lastSeen ? new Date(a.lastSeen).getTime() : 0)
+            )
+            .slice(0, 20);
+        } else if (sortBy === "connections") {
+          result = discoverUsers
+            .sort((a, b) => b.connectionCount - a.connectionCount)
+            .slice(0, 20);
+        } else {
+          // random
           const shuffled = [...discoverUsers];
           for (let i = shuffled.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
@@ -99,39 +122,42 @@ export default function DiscoverScreen() {
       }
 
       try {
-        let q: any = collection(db, 'users');
+        let q: any = collection(db, "users");
 
-        if (sortBy === 'rating') {
-          q = query(q, orderBy('rating', 'desc'), limit(20));
-        } else if (sortBy === 'verified') {
-          q = query(q, where('verified', '==', true), limit(20));
-        } else if (sortBy === 'connections') {
-          q = query(q, orderBy('connectionCount', 'desc'), limit(20));
-        } else if (sortBy === 'active') {
-          q = query(q, orderBy('lastSeen', 'desc'), limit(20));
+        if (sortBy === "rating") {
+          q = query(q, orderBy("rating", "desc"), limit(20));
+        } else if (sortBy === "verified") {
+          q = query(q, where("verified", "==", true), limit(20));
+        } else if (sortBy === "connections") {
+          q = query(q, orderBy("connectionCount", "desc"), limit(20));
+        } else if (sortBy === "active") {
+          q = query(q, orderBy("lastSeen", "desc"), limit(20));
         } else {
           // random: get more and shuffle
           q = query(q, limit(50));
         }
 
         const snapshot = await getDocs(q);
-        let fetchedUsers = snapshot.docs.map(doc => {
+        let fetchedUsers = snapshot.docs.map((doc) => {
           const data = doc.data() as any; // Firebase returns unknown, we'll handle safely
           return {
             id: doc.id,
-            username: data.username || 'Unknown',
-            gender: data.gender || 'other',
-            avatar: data.avatar || '👤',
+            username: data.username || "Unknown",
+            gender: data.gender || "other",
+            avatar: data.avatar || "👤",
             rating: data.rating || 0,
             verified: data.verified || false,
             connectionCount: data.connectionCount || 0,
-            status: data.status || 'offline',
-            lastSeen: data.lastSeen?.toDate?.()?.toISOString() || data.lastSeen || undefined
+            status: data.status || "offline",
+            lastSeen:
+              data.lastSeen?.toDate?.()?.toISOString() ||
+              data.lastSeen ||
+              undefined,
           } as DiscoverUser;
         });
 
         // Cache users for offline use
-        fetchedUsers.forEach(user => {
+        fetchedUsers.forEach((user) => {
           UserCache.setUser({
             id: user.id,
             username: user.username,
@@ -140,30 +166,35 @@ export default function DiscoverScreen() {
             rating: user.rating,
             verified: user.verified,
             status: user.status,
-            lastSeen: typeof user.lastSeen === 'string' ? user.lastSeen : undefined,
+            lastSeen:
+              typeof user.lastSeen === "string" ? user.lastSeen : undefined,
             connectionCount: user.connectionCount,
-            synced: true
+            synced: true,
           });
         });
 
         // Filter out excluded ids (current user and existing connections)
-        fetchedUsers = fetchedUsers.filter(u => u.id !== user?.uid);
+        fetchedUsers = fetchedUsers.filter((u) => u.id !== user?.uid);
 
         // Remove users that are already connected
-        const userConnections = ConnectionCache.getUserConnections(user?.uid || '');
-        fetchedUsers = fetchedUsers.filter(u =>
-          !userConnections.some(conn => conn.connectedUserId === u.id)
+        const userConnections = ConnectionCache.getUserConnections(
+          user?.uid || ""
+        );
+        fetchedUsers = fetchedUsers.filter(
+          (u) => !userConnections.some((conn) => conn.connectedUserId === u.id)
         );
 
         // For random, shuffle and take 20
-        if (sortBy === 'random') {
-          fetchedUsers = fetchedUsers.sort(() => 0.5 - Math.random()).slice(0, 20);
+        if (sortBy === "random") {
+          fetchedUsers = fetchedUsers
+            .sort(() => 0.5 - Math.random())
+            .slice(0, 20);
         }
 
         setUsers(fetchedUsers);
         setIsLoading(false); // Hide loading when server data arrives
       } catch (serverError) {
-        console.warn('Server fetch failed:', serverError);
+        console.warn("Server fetch failed:", serverError);
         // Keep cached data displayed, no error if we have cached
         if (cachedUsers.length === 0) {
           setIsError(true);
@@ -177,14 +208,17 @@ export default function DiscoverScreen() {
       // On error, try to show cached users if available
       const cachedUsers = UserCache.getAllUsers();
       if (cachedUsers.length > 0) {
-        let filteredCachedUsers = cachedUsers.filter(u =>
-          u.id !== user?.uid &&
-          !ConnectionCache.getUserConnections(user?.uid || '').some(conn => conn.connectedUserId === u.id)
+        let filteredCachedUsers = cachedUsers.filter(
+          (u) =>
+            u.id !== user?.uid &&
+            !ConnectionCache.getUserConnections(user?.uid || "").some(
+              (conn) => conn.connectedUserId === u.id
+            )
         );
 
         let result: DiscoverUser[];
         // Convert CachedUser to DiscoverUser format and apply sorting
-        const discoverUsers: DiscoverUser[] = filteredCachedUsers.map(u => ({
+        const discoverUsers: DiscoverUser[] = filteredCachedUsers.map((u) => ({
           id: u.id,
           username: u.username,
           gender: u.gender,
@@ -196,17 +230,26 @@ export default function DiscoverScreen() {
           lastSeen: u.lastSeen,
         }));
 
-        if (sortBy === 'rating') {
-          result = discoverUsers.sort((a, b) => b.rating - a.rating).slice(0, 20);
-        } else if (sortBy === 'verified') {
-          result = discoverUsers.filter(u => u.verified).slice(0, 20);
-        } else if (sortBy === 'active') {
+        if (sortBy === "rating") {
           result = discoverUsers
-            .sort((a, b) => (b.lastSeen ? new Date(b.lastSeen).getTime() : 0) - (a.lastSeen ? new Date(a.lastSeen).getTime() : 0))
+            .sort((a, b) => b.rating - a.rating)
             .slice(0, 20);
-        } else if (sortBy === 'connections') {
-          result = discoverUsers.sort((a, b) => b.connectionCount - a.connectionCount).slice(0, 20);
-        } else { // random
+        } else if (sortBy === "verified") {
+          result = discoverUsers.filter((u) => u.verified).slice(0, 20);
+        } else if (sortBy === "active") {
+          result = discoverUsers
+            .sort(
+              (a, b) =>
+                (b.lastSeen ? new Date(b.lastSeen).getTime() : 0) -
+                (a.lastSeen ? new Date(a.lastSeen).getTime() : 0)
+            )
+            .slice(0, 20);
+        } else if (sortBy === "connections") {
+          result = discoverUsers
+            .sort((a, b) => b.connectionCount - a.connectionCount)
+            .slice(0, 20);
+        } else {
+          // random
           const shuffled = [...discoverUsers];
           for (let i = shuffled.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
@@ -216,7 +259,7 @@ export default function DiscoverScreen() {
         }
 
         setUsers(result);
-        setIsError(false); 
+        setIsError(false);
       } else {
         setIsLoading(false);
       }
@@ -232,13 +275,15 @@ export default function DiscoverScreen() {
     if (!user?.uid) return;
 
     const pendingQuery = query(
-      collection(db, 'chatRequests'),
-      where('senderId', '==', user.uid),
-      where('status', '==', 'pending')
+      collection(db, "chatRequests"),
+      where("senderId", "==", user.uid),
+      where("status", "==", "pending")
     );
 
     const unsubscribe = onSnapshot(pendingQuery, (snapshot) => {
-      const pendingUserIds = new Set(snapshot.docs.map(doc => doc.data().receiverId));
+      const pendingUserIds = new Set(
+        snapshot.docs.map((doc) => doc.data().receiverId)
+      );
       setPendingRequests(pendingUserIds);
     });
 
@@ -258,15 +303,15 @@ export default function DiscoverScreen() {
       const requestDoc = {
         senderId: user.uid,
         receiverId: userId,
-        status: 'pending' as const,
-        message: '',
+        status: "pending" as const,
+        message: "",
         createdAt: new Date(),
       };
 
-      await addDoc(collection(db, 'chatRequests'), requestDoc);
-      Alert.alert('Success', `Connection request sent to ${username}!`);
+      await addDoc(collection(db, "chatRequests"), requestDoc);
+      Alert.alert("Success", `Connection request sent to ${username}!`);
     } catch (error) {
-      Alert.alert('Error', 'Failed to send request');
+      Alert.alert("Error", "Failed to send request");
     }
   };
 
@@ -281,7 +326,7 @@ export default function DiscoverScreen() {
             <View style={styles.usernameRow}>
               <Text style={styles.username}>{item.username}</Text>
               {item.verified && (
-                <Shield size={16} color="#007AFF" fill="#007AFF" />
+                <Shield size={16} color="#013a96da" fill="#013a96da" />
               )}
             </View>
             <View style={styles.statsRow}>
@@ -315,9 +360,11 @@ export default function DiscoverScreen() {
         <TouchableOpacity
           style={[
             styles.connectButton,
-            hasPendingRequest && styles.connectButtonDisabled
+            hasPendingRequest && styles.connectButtonDisabled,
           ]}
-          onPress={() => !hasPendingRequest && handleSendRequest(item.id, item.username)}
+          onPress={() =>
+            !hasPendingRequest && handleSendRequest(item.id, item.username)
+          }
           disabled={hasPendingRequest}
         >
           <Send size={18} color="#fff" />
@@ -333,26 +380,50 @@ export default function DiscoverScreen() {
     <View style={styles.container}>
       <View style={styles.filterContainer}>
         <TouchableOpacity
-          style={[styles.filterButton, sortBy === "random" && styles.filterButtonActive]}
+          style={[
+            styles.filterButton,
+            sortBy === "random" && styles.filterButtonActive,
+          ]}
           onPress={() => setSortBy("random")}
         >
-          <Text style={[styles.filterButtonText, sortBy === "random" && styles.filterButtonTextActive]}>
+          <Text
+            style={[
+              styles.filterButtonText,
+              sortBy === "random" && styles.filterButtonTextActive,
+            ]}
+          >
             Random
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.filterButton, sortBy === "rating" && styles.filterButtonActive]}
+          style={[
+            styles.filterButton,
+            sortBy === "rating" && styles.filterButtonActive,
+          ]}
           onPress={() => setSortBy("rating")}
         >
-          <Text style={[styles.filterButtonText, sortBy === "rating" && styles.filterButtonTextActive]}>
+          <Text
+            style={[
+              styles.filterButtonText,
+              sortBy === "rating" && styles.filterButtonTextActive,
+            ]}
+          >
             Top Rated
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.filterButton, sortBy === "verified" && styles.filterButtonActive]}
+          style={[
+            styles.filterButton,
+            sortBy === "verified" && styles.filterButtonActive,
+          ]}
           onPress={() => setSortBy("verified")}
         >
-          <Text style={[styles.filterButtonText, sortBy === "verified" && styles.filterButtonTextActive]}>
+          <Text
+            style={[
+              styles.filterButtonText,
+              sortBy === "verified" && styles.filterButtonTextActive,
+            ]}
+          >
             Verified
           </Text>
         </TouchableOpacity>
@@ -360,19 +431,24 @@ export default function DiscoverScreen() {
 
       {isLoading ? (
         <View style={styles.centered}>
-          <ActivityIndicator size="large" color="#007AFF" />
+          <ActivityIndicator size="large" color="#013a96da" />
         </View>
       ) : isError ? (
         <View style={styles.centered}>
           <Text style={styles.errorText}>Failed to load users</Text>
-          <Text style={styles.errorSubtext}>{error?.message || "Please check your connection"}</Text>
-          <TouchableOpacity style={styles.retryButton} onPress={() => fetchUsers()}>
+          <Text style={styles.errorSubtext}>
+            {error?.message || "Please check your connection"}
+          </Text>
+          <TouchableOpacity
+            style={styles.retryButton}
+            onPress={() => fetchUsers()}
+          >
             <Text style={styles.retryButtonText}>Retry</Text>
           </TouchableOpacity>
         </View>
       ) : (
         <FlatList
-          data={users as DiscoverUser[] || []}
+          data={(users as DiscoverUser[]) || []}
           renderItem={renderUser}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
@@ -413,7 +489,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   filterButtonActive: {
-    backgroundColor: "#007AFF",
+    backgroundColor: "#013a96da",
   },
   filterButtonText: {
     fontSize: 14,
@@ -501,7 +577,7 @@ const styles = StyleSheet.create({
   },
   connectButton: {
     flexDirection: "row",
-    backgroundColor: "#007AFF",
+    backgroundColor: "#013a96da",
     borderRadius: 12,
     padding: 12,
     alignItems: "center",
@@ -544,7 +620,7 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   retryButton: {
-    backgroundColor: "#007AFF",
+    backgroundColor: "#013a96da",
     borderRadius: 8,
     paddingVertical: 10,
     paddingHorizontal: 20,

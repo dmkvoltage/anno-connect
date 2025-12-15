@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState } from "react";
 import {
   Modal,
   View,
@@ -8,10 +8,10 @@ import {
   Alert,
   ActivityIndicator,
   StyleSheet,
-} from 'react-native';
-import { Star, X } from 'lucide-react-native';
-import { useAuth } from '@/contexts/AuthContext';
-import { trpc } from '@/lib/trpc';
+} from "react-native";
+import { Star, X } from "lucide-react-native";
+import { useAuth } from "@/contexts/AuthContext";
+import { trpc } from "@/lib/trpc";
 
 interface RateUserModalProps {
   visible: boolean;
@@ -30,7 +30,7 @@ export default function RateUserModal({
 }: RateUserModalProps) {
   const { user } = useAuth();
   const [rating, setRating] = useState(0);
-  const [reason, setReason] = useState('');
+  const [reason, setReason] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSubmit = async () => {
@@ -45,11 +45,11 @@ export default function RateUserModal({
         reason: reason.trim() || undefined,
       });
 
-      Alert.alert('Success', `Thank you for rating ${username}!`);
+      Alert.alert("Success", `Thank you for rating ${username}!`);
       onRatingSubmitted?.();
       handleClose();
     } catch (error: any) {
-      Alert.alert('Error', error.message || 'Failed to submit rating');
+      Alert.alert("Error", error.message || "Failed to submit rating");
     } finally {
       setIsSubmitting(false);
     }
@@ -57,7 +57,7 @@ export default function RateUserModal({
 
   const handleClose = () => {
     setRating(0);
-    setReason('');
+    setReason("");
     onClose();
   };
 
@@ -72,8 +72,8 @@ export default function RateUserModal({
           >
             <Star
               size={32}
-              color={star <= rating ? '#FFB800' : '#DDD'}
-              fill={star <= rating ? '#FFB800' : 'transparent'}
+              color={star <= rating ? "#FFB800" : "#DDD"}
+              fill={star <= rating ? "#FFB800" : "transparent"}
             />
           </TouchableOpacity>
         ))}
@@ -98,7 +98,9 @@ export default function RateUserModal({
           </View>
 
           <View style={styles.content}>
-            <Text style={styles.subtitle}>How would you rate your experience?</Text>
+            <Text style={styles.subtitle}>
+              How would you rate your experience?
+            </Text>
 
             {renderStars()}
 
@@ -125,7 +127,7 @@ export default function RateUserModal({
               <TouchableOpacity
                 style={[
                   styles.submitButton,
-                  rating === 0 && styles.submitButtonDisabled
+                  rating === 0 && styles.submitButtonDisabled,
                 ]}
                 onPress={handleSubmit}
                 disabled={rating === 0 || isSubmitting}
@@ -147,30 +149,30 @@ export default function RateUserModal({
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
     padding: 20,
   },
   modal: {
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
     borderRadius: 16,
-    width: '100%',
+    width: "100%",
     maxWidth: 400,
-    maxHeight: '80%',
+    maxHeight: "80%",
   },
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
     padding: 20,
     borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
+    borderBottomColor: "#e0e0e0",
   },
   title: {
     fontSize: 20,
-    fontWeight: '700',
-    color: '#1a1a1a',
+    fontWeight: "700",
+    color: "#1a1a1a",
   },
   closeButton: {
     padding: 4,
@@ -180,13 +182,13 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontSize: 16,
-    color: '#666',
+    color: "#666",
     marginBottom: 20,
-    textAlign: 'center',
+    textAlign: "center",
   },
   starsContainer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
+    flexDirection: "row",
+    justifyContent: "center",
     marginBottom: 24,
   },
   starButton: {
@@ -194,49 +196,49 @@ const styles = StyleSheet.create({
   },
   reasonLabel: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#1a1a1a',
+    fontWeight: "600",
+    color: "#1a1a1a",
     marginBottom: 8,
   },
   reasonInput: {
     borderWidth: 1,
-    borderColor: '#e0e0e0',
+    borderColor: "#e0e0e0",
     borderRadius: 8,
     padding: 12,
     fontSize: 16,
     minHeight: 80,
-    textAlignVertical: 'top',
+    textAlignVertical: "top",
     marginBottom: 24,
   },
   buttonContainer: {
-    flexDirection: 'row',
+    flexDirection: "row",
     gap: 12,
   },
   cancelButton: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: "#f5f5f5",
     borderRadius: 8,
     padding: 14,
-    alignItems: 'center',
+    alignItems: "center",
   },
   cancelButtonText: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#666',
+    fontWeight: "600",
+    color: "#666",
   },
   submitButton: {
     flex: 1,
-    backgroundColor: '#007AFF',
+    backgroundColor: "#013a96da",
     borderRadius: 8,
     padding: 14,
-    alignItems: 'center',
+    alignItems: "center",
   },
   submitButtonDisabled: {
     opacity: 0.5,
   },
   submitButtonText: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#fff',
+    fontWeight: "600",
+    color: "#fff",
   },
 });

@@ -270,7 +270,7 @@ export default function ConnectionsScreen() {
             <Text style={styles.friendUsername}>{item.connectedUserUsername}</Text>
             {item.verified && (
               <View style={styles.verifiedBadge}>
-                <Star size={12} color="#007AFF" fill="#007AFF" />
+                <Star size={12} color="#013a96da" fill="#013a96da" />
               </View>
             )}
           </View>
@@ -303,7 +303,7 @@ export default function ConnectionsScreen() {
     if (loading) {
       return (
         <View style={styles.centered}>
-          <ActivityIndicator size="large" color="#007AFF" />
+          <ActivityIndicator size="large" color="#013a96da" />
         </View>
       );
     }
@@ -418,7 +418,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   tabButtonActive: {
-    backgroundColor: "#007AFF",
+    backgroundColor: "#013a96da",
   },
   tabButtonText: {
     fontSize: 14,
@@ -460,7 +460,7 @@ const styles = StyleSheet.create({
   },
   requestStatus: {
     fontSize: 12,
-    color: "#007AFF",
+    color: "#013a96da",
     fontWeight: "600" as const,
   },
   requestActions: {

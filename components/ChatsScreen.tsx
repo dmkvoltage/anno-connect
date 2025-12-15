@@ -369,7 +369,7 @@ export default function ChatsScreen() {
       <View style={styles.chatInfo}>
         <View style={styles.usernameRow}>
           <Text style={styles.chatUsername}>{item.connectedUserUsername}</Text>
-          {item.verified && <Star size={16} color="#007AFF" fill="#007AFF" />}
+          {item.verified && <Star size={16} color="#013a96da" fill="#013a96da" />}
         </View>
         <View style={styles.lastMessageContainer}>
           {renderStatusIcon(item)}
@@ -401,7 +401,7 @@ export default function ChatsScreen() {
   if (loading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator size="large" color="#007AFF" />
+        <ActivityIndicator size="large" color="#013a96da" />
       </View>
     )
   }

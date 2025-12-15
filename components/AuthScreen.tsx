@@ -262,8 +262,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   genderButtonActive: {
-    backgroundColor: "#007AFF",
-    borderColor: "#007AFF",
+    backgroundColor: "#013a96da",
+    borderColor: "#013a96da",
   },
   genderButtonText: {
     fontSize: 14,
@@ -274,7 +274,7 @@ const styles = StyleSheet.create({
     color: "#fff",
   },
   button: {
-    backgroundColor: "#007AFF",
+    backgroundColor: "#013a96da",
     borderRadius: 12,
     padding: 16,
     flexDirection: "row",
@@ -296,7 +296,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   switchButtonText: {
-    color: "#007AFF",
+    color: "#013a96da",
     fontSize: 16,
   },
 });

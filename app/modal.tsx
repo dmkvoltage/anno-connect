@@ -37,7 +37,11 @@ export default function ModalScreen() {
       </Pressable>
 
       {/* Use a light status bar on iOS to account for the black space above the modal */}
-      <StatusBar style={Platform.OS === "ios" ? "light" : "auto"} />
+      <StatusBar
+        style="light"
+        translucent
+        backgroundColor="transparent"
+      />
     </Modal>
   );
 }
@@ -69,7 +73,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   closeButton: {
-    backgroundColor: "#007AFF",
+    backgroundColor: "#013a96da",
     paddingHorizontal: 24,
     paddingVertical: 12,
     borderRadius: 10,

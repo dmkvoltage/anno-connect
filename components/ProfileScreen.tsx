@@ -8,7 +8,14 @@ import {
 } from "react-native";
 import React from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import { Shield, Star, Users, Calendar, LogOut, Edit } from "lucide-react-native";
+import {
+  Shield,
+  Star,
+  Users,
+  Calendar,
+  LogOut,
+  Edit,
+} from "lucide-react-native";
 
 export default function ProfileScreen() {
   const { userProfile, signOut } = useAuth();
@@ -38,13 +45,13 @@ export default function ProfileScreen() {
         <View style={styles.avatarContainer}>
           <Text style={styles.avatar}>{userProfile.avatar}</Text>
           <TouchableOpacity style={styles.editButton}>
-            <Edit size={20} color="#007AFF" />
+            <Edit size={20} color="#013a96da" />
           </TouchableOpacity>
         </View>
         <View style={styles.usernameRow}>
           <Text style={styles.username}>{userProfile.username}</Text>
           {userProfile.verified && (
-            <Shield size={20} color="#007AFF" fill="#007AFF" />
+            <Shield size={20} color="#013a96da" fill="#013a96da" />
           )}
         </View>
         <Text style={styles.gender}>{userProfile.gender}</Text>
@@ -60,7 +67,7 @@ export default function ProfileScreen() {
         </View>
 
         <View style={styles.statBox}>
-          <Users size={24} color="#007AFF" />
+          <Users size={24} color="#013a96da" />
           <Text style={styles.statValue}>{userProfile.connectionCount}</Text>
           <Text style={styles.statLabel}>Connections</Text>
         </View>
@@ -69,14 +76,19 @@ export default function ProfileScreen() {
           <Calendar size={24} color="#34C759" />
           <Text style={styles.statValue}>
             {(userProfile.joinDate as any)?.toDate
-              ? (userProfile.joinDate as any).toDate().toLocaleDateString("en-US", {
-                  month: "short",
-                  year: "numeric",
-                })
-              : new Date(userProfile.joinDate as any).toLocaleDateString("en-US", {
-                  month: "short",
-                  year: "numeric",
-                })}
+              ? (userProfile.joinDate as any)
+                  .toDate()
+                  .toLocaleDateString("en-US", {
+                    month: "short",
+                    year: "numeric",
+                  })
+              : new Date(userProfile.joinDate as any).toLocaleDateString(
+                  "en-US",
+                  {
+                    month: "short",
+                    year: "numeric",
+                  }
+                )}
           </Text>
           <Text style={styles.statLabel}>Joined</Text>
         </View>
@@ -148,7 +160,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 8,
     borderWidth: 2,
-    borderColor: "#007AFF",
+    borderColor: "#013a96da",
   },
   usernameRow: {
     flexDirection: "row",
