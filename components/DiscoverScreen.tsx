@@ -40,18 +40,14 @@ export default function DiscoverScreen() {
   const [error, setError] = useState<Error | null>(null);
   const [pendingRequests, setPendingRequests] = useState<Set<string>>(new Set());
 
-  const fetchUsers = async (showLoading = true) => {
+  const fetchUsers = async (background = false) => {
     try {
-      if (showLoading) {
-        setIsLoading(true);
-      }
       setIsError(false);
       setError(null);
 
-      // Load from cache first (offline-first)
+      // Always show cached users if available for instant UX
       const cachedUsers = UserCache.getAllUsers();
-      if (cachedUsers.length > 0 && !showLoading) {
-        // Show cached users immediately for better UX
+      if (cachedUsers.length > 0) {
         let filteredCachedUsers = cachedUsers.filter(u =>
           u.id !== user?.uid &&
           !ConnectionCache.getUserConnections(user?.uid || '').some(conn => conn.connectedUserId === u.id)
@@ -80,6 +76,8 @@ export default function DiscoverScreen() {
           result = discoverUsers
             .sort((a, b) => (b.lastSeen ? new Date(b.lastSeen).getTime() : 0) - (a.lastSeen ? new Date(a.lastSeen).getTime() : 0))
             .slice(0, 20);
+        } else if (sortBy === 'connections') {
+          result = discoverUsers.sort((a, b) => b.connectionCount - a.connectionCount).slice(0, 20);
         } else { // random
           const shuffled = [...discoverUsers];
           for (let i = shuffled.length - 1; i > 0; i--) {
@@ -90,10 +88,16 @@ export default function DiscoverScreen() {
         }
 
         setUsers(result);
-        if (!showLoading) return; // Don't fetch from server if we just showed cached data
+        setIsLoading(false); // We have data to show
+
+        if (background) return; // Don't fetch from server for background loads
       }
 
-      // Try to fetch from server
+      // Fetch from server to update with fresh data
+      if (!background && cachedUsers.length === 0) {
+        setIsLoading(true); // Only show loading if no cached data
+      }
+
       try {
         let q: any = collection(db, 'users');
 
@@ -157,9 +161,14 @@ export default function DiscoverScreen() {
         }
 
         setUsers(fetchedUsers);
+        setIsLoading(false); // Hide loading when server data arrives
       } catch (serverError) {
-        console.warn('Server fetch failed, using cached data:', serverError);
-        // If server fails, we've already shown cached data above
+        console.warn('Server fetch failed:', serverError);
+        // Keep cached data displayed, no error if we have cached
+        if (cachedUsers.length === 0) {
+          setIsError(true);
+          setError(serverError as Error);
+        }
       }
     } catch (err) {
       setIsError(true);
@@ -207,10 +216,8 @@ export default function DiscoverScreen() {
         }
 
         setUsers(result);
-        setIsError(false); // Don't show error if we have cached data
-      }
-    } finally {
-      if (showLoading) {
+        setIsError(false); 
+      } else {
         setIsLoading(false);
       }
     }
