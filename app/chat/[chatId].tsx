@@ -10,14 +10,12 @@ TextInput,
 TouchableOpacity,
 KeyboardAvoidingView,
 StatusBar,
-Platform,
 ActivityIndicator,
 Modal,
 Animated,
 Pressable,
 Keyboard,
 InteractionManager,
-Dimensions,
 } from "react-native"
 import { PanGestureHandler, State } from "react-native-gesture-handler"
 import { useSafeAreaInsets } from "react-native-safe-area-context"
@@ -94,7 +92,6 @@ const initialScrollIndex = useRef<number | null>(null)
 const didInitialScroll = useRef(false)
 const hasResetUnreadCount = useRef(false)
 const slideAnim = useRef(new Animated.Value(300)).current
-const [isViewable, setIsViewable] = useState(true)
 const viewabilityConfig = useRef({
   itemVisiblePercentThreshold: 50,
 }).current
@@ -857,7 +854,7 @@ return (
         ref={flatListRef}
         data={messages}
         renderItem={renderMessage}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item, index) => `${item.id}-${index}`}
         contentContainerStyle={styles.messagesContainer}
         style={styles.messagesList}
         onViewableItemsChanged={onViewableItemsChanged}
